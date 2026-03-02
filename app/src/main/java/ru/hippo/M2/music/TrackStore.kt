@@ -203,7 +203,7 @@ class TrackStore(private val context: Context) {
                 ?: fallbackName.substringBeforeLast('.')
             val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
                 ?.takeIf { it.isNotBlank() }
-                ?: "Unknown Artist"
+                ?: ""
             val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull()
                 ?: 0L
@@ -218,7 +218,7 @@ class TrackStore(private val context: Context) {
         } catch (_: Exception) {
             TrackMetadata(
                 title = fallbackName.substringBeforeLast('.'),
-                artist = "Unknown Artist",
+                artist = "",
                 durationMs = 0L,
                 artworkPath = null
             )
