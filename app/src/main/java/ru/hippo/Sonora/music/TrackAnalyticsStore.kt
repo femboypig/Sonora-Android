@@ -1,4 +1,4 @@
-package ru.hippo.M2.music
+package ru.hippo.Sonora.music
 
 import android.content.Context
 import org.json.JSONObject
@@ -14,7 +14,7 @@ data class TrackAnalytics(
 
 class TrackAnalyticsStore(private val context: Context) {
 
-    private val analyticsFile = File(context.filesDir, "m2_track_analytics_v1.json")
+    private val analyticsFile = File(context.filesDir, "sonora_track_analytics_v1.json")
 
     fun recordPlay(trackId: String) {
         if (trackId.isBlank()) {

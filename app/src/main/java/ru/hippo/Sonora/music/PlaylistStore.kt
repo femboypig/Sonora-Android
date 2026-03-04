@@ -1,4 +1,4 @@
-package ru.hippo.M2.music
+package ru.hippo.Sonora.music
 
 import android.content.Context
 import org.json.JSONArray
@@ -16,8 +16,8 @@ data class PlaylistEntry(
 
 class PlaylistStore(private val context: Context) {
 
-    private val playlistsFile = File(context.filesDir, "m2_playlists_v1.json")
-    private val coverDir = File(context.filesDir, "M2/playlist_covers").apply { mkdirs() }
+    private val playlistsFile = File(context.filesDir, "sonora_playlists_v1.json")
+    private val coverDir = File(context.filesDir, "Sonora/playlist_covers").apply { mkdirs() }
 
     fun loadPlaylists(): List<PlaylistEntry> {
         if (!playlistsFile.exists()) {

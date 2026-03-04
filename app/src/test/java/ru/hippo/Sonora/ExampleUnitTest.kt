@@ -1,4 +1,4 @@
-package ru.hippo.M2
+package ru.hippo.Sonora
 
 import org.junit.Test
 

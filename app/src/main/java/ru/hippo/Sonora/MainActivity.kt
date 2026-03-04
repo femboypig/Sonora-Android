@@ -1,4 +1,4 @@
-package ru.hippo.M2
+package ru.hippo.Sonora
 
 import android.Manifest
 import android.content.Intent
@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -52,6 +53,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -132,25 +134,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import ru.hippo.M2.music.PlaybackController
-import ru.hippo.M2.music.PlaybackHistoryStore
-import ru.hippo.M2.music.PlaylistStore
-import ru.hippo.M2.music.RepeatMode
-import ru.hippo.M2.music.TrackAnalytics
-import ru.hippo.M2.music.TrackAnalyticsStore
-import ru.hippo.M2.music.TrackItem
-import ru.hippo.M2.music.TrackStore
-import ru.hippo.M2.ui.theme.M2MiniPlayerBorderDark
-import ru.hippo.M2.ui.theme.M2MiniPlayerBorderLight
-import ru.hippo.M2.ui.theme.M2MiniPlayerDark
-import ru.hippo.M2.ui.theme.M2MiniPlayerLight
-import ru.hippo.M2.ui.theme.M2TabActiveDark
-import ru.hippo.M2.ui.theme.M2TabActiveLight
-import ru.hippo.M2.ui.theme.M2TabBarDark
-import ru.hippo.M2.ui.theme.M2TabBarLight
-import ru.hippo.M2.ui.theme.M2TabInactiveDark
-import ru.hippo.M2.ui.theme.M2TabInactiveLight
-import ru.hippo.M2.ui.theme.M2Theme
+import ru.hippo.Sonora.music.PlaybackController
+import ru.hippo.Sonora.music.PlaybackHistoryStore
+import ru.hippo.Sonora.music.PlaylistStore
+import ru.hippo.Sonora.music.RepeatMode
+import ru.hippo.Sonora.music.TrackAnalytics
+import ru.hippo.Sonora.music.TrackAnalyticsStore
+import ru.hippo.Sonora.music.TrackItem
+import ru.hippo.Sonora.music.TrackStore
+import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerBorderDark
+import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerBorderLight
+import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerDark
+import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerLight
+import ru.hippo.Sonora.ui.theme.SonoraTabActiveDark
+import ru.hippo.Sonora.ui.theme.SonoraTabActiveLight
+import ru.hippo.Sonora.ui.theme.SonoraTabBarDark
+import ru.hippo.Sonora.ui.theme.SonoraTabBarLight
+import ru.hippo.Sonora.ui.theme.SonoraTabInactiveDark
+import ru.hippo.Sonora.ui.theme.SonoraTabInactiveLight
+import ru.hippo.Sonora.ui.theme.SonoraTheme
 
 class MainActivity : ComponentActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -173,14 +175,14 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            M2Theme(dynamicColor = false) {
-                M2App()
+            SonoraTheme(dynamicColor = false) {
+                SonoraApp()
             }
         }
     }
 }
 
-private enum class M2Tab {
+private enum class SonoraTab {
     Home,
     Music,
     Playlists
@@ -191,8 +193,14 @@ private enum class PlaylistCreateStep {
     Tracks
 }
 
-private data class M2TabSpec(
-    val tab: M2Tab,
+private enum class TrackSelectionContext {
+    Music,
+    Favorites,
+    PlaylistDetail
+}
+
+private data class SonoraTabSpec(
+    val tab: SonoraTab,
     val title: String,
     val iconRes: Int
 )
@@ -228,22 +236,22 @@ private data class SwipeTrackAction(
     val fullSwipeEnabled: Boolean = false
 )
 
-private val M2AndroidYSMusicFontFamily = FontFamily(
+private val SonoraAndroidYSMusicFontFamily = FontFamily(
     Font(R.font.ysmusic_headline_bold, FontWeight.Bold)
 )
 
-private val M2AndroidSFProSemiboldFamily = FontFamily(
+private val SonoraAndroidSFProSemiboldFamily = FontFamily(
     Font(R.font.sf_pro_text_semibold, FontWeight.SemiBold),
     Font(R.font.sf_pro_text_bold, FontWeight.Bold)
 )
 
-private val M2AndroidHomeHeadingFontFamily = FontFamily(
+private val SonoraAndroidHomeHeadingFontFamily = FontFamily(
     Font(R.font.tt_commons_pro_expanded_extrabold, FontWeight.ExtraBold)
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun M2App() {
+private fun SonoraApp() {
     val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val trackStore = remember(context) { TrackStore(context) }
     val playlistStore = remember(context) { PlaylistStore(context) }
@@ -255,10 +263,11 @@ private fun M2App() {
     var tracks by remember { mutableStateOf(trackStore.loadTracks()) }
     var userPlaylists by remember { mutableStateOf(playlistStore.loadPlaylists()) }
 
-    var selectedTab by rememberSaveable { mutableStateOf(M2Tab.Home) }
+    var selectedTab by rememberSaveable { mutableStateOf(SonoraTab.Home) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var showMusicPage by rememberSaveable { mutableStateOf(false) }
-    var musicQuery by rememberSaveable { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var myMusicQuery by rememberSaveable { mutableStateOf("") }
     var favoritesQuery by rememberSaveable { mutableStateOf("") }
     var playlistsQuery by rememberSaveable { mutableStateOf("") }
     var showHistoryPage by rememberSaveable { mutableStateOf(false) }
@@ -275,6 +284,8 @@ private fun M2App() {
     var addTracksTargetPlaylistID by rememberSaveable { mutableStateOf<String?>(null) }
     var addTracksSelectedIDs by remember { mutableStateOf(setOf<String>()) }
     var playerVisible by rememberSaveable { mutableStateOf(false) }
+    var trackSelectionContext by rememberSaveable { mutableStateOf<TrackSelectionContext?>(null) }
+    var selectedTrackIDs by remember { mutableStateOf(setOf<String>()) }
     var showSleepTimerDialog by rememberSaveable { mutableStateOf(false) }
     var quickAddTrackID by rememberSaveable { mutableStateOf<String?>(null) }
     var showPlaylistOptionsDialog by rememberSaveable { mutableStateOf(false) }
@@ -329,6 +340,24 @@ private fun M2App() {
         showPlaylistsListPage = false
     }
 
+    LaunchedEffect(
+        showMusicPage,
+        myMusicQuery,
+        musicListState.firstVisibleItemIndex,
+        musicListState.firstVisibleItemScrollOffset
+    ) {
+        if (!showMusicPage || myMusicQuery.isNotBlank()) {
+            return@LaunchedEffect
+        }
+        val scrolledIntoContent = musicListState.firstVisibleItemIndex > 0 ||
+            musicListState.firstVisibleItemScrollOffset > dismissThreshold
+        if (scrolledIntoContent && showSearch) {
+            showSearch = false
+            pullRevealDistance = 0f
+            pullHideDistance = 0f
+        }
+    }
+
     LaunchedEffect(playbackController.currentTrackId) {
         if (playbackController.currentTrackId == null) {
             playerVisible = false
@@ -343,7 +372,8 @@ private fun M2App() {
         showFavoritesPage,
         showPlaylistsListPage,
         showSearch,
-        musicQuery,
+        searchQuery,
+        myMusicQuery,
         favoritesQuery,
         playlistsQuery,
         revealThreshold,
@@ -362,7 +392,7 @@ private fun M2App() {
                 }
 
                 val inPlaylistDetail = openedPlaylistID != null || openedHomeAlbumArtistKey != null
-                if (selectedTab == M2Tab.Home) {
+                if (selectedTab == SonoraTab.Home) {
                     if (showSearch) {
                         showSearch = false
                     }
@@ -371,7 +401,7 @@ private fun M2App() {
                     return Offset.Zero
                 }
                 val isCollectionsSubpage = showMusicPage || showFavoritesPage || showPlaylistsListPage
-                if (selectedTab == M2Tab.Playlists && !isCollectionsSubpage && !showSearch) {
+                if (selectedTab == SonoraTab.Playlists && !isCollectionsSubpage && !showSearch) {
                     // Keep root Collections clean: no pull-to-reveal there.
                     pullRevealDistance = 0f
                     pullHideDistance = 0f
@@ -391,13 +421,13 @@ private fun M2App() {
                     showPlaylistsListPage -> playlistsBrowseListState.firstVisibleItemIndex == 0 &&
                         playlistsBrowseListState.firstVisibleItemScrollOffset == 0
 
-                    selectedTab == M2Tab.Home -> homeListState.firstVisibleItemIndex == 0 &&
+                    selectedTab == SonoraTab.Home -> homeListState.firstVisibleItemIndex == 0 &&
                         homeListState.firstVisibleItemScrollOffset == 0
 
-                    selectedTab == M2Tab.Music -> musicListState.firstVisibleItemIndex == 0 &&
+                    selectedTab == SonoraTab.Music -> musicListState.firstVisibleItemIndex == 0 &&
                         musicListState.firstVisibleItemScrollOffset == 0
 
-                    selectedTab == M2Tab.Playlists -> playlistsListState.firstVisibleItemIndex == 0 &&
+                    selectedTab == SonoraTab.Playlists -> playlistsListState.firstVisibleItemIndex == 0 &&
                         playlistsListState.firstVisibleItemScrollOffset == 0
 
                     else -> false
@@ -416,24 +446,24 @@ private fun M2App() {
                     showPlaylistsListPage -> playlistsBrowseListState.firstVisibleItemIndex > 0 ||
                         playlistsBrowseListState.firstVisibleItemScrollOffset > dismissThreshold
 
-                    selectedTab == M2Tab.Home -> homeListState.firstVisibleItemIndex > 0 ||
+                    selectedTab == SonoraTab.Home -> homeListState.firstVisibleItemIndex > 0 ||
                         homeListState.firstVisibleItemScrollOffset > dismissThreshold
 
-                    selectedTab == M2Tab.Music -> musicListState.firstVisibleItemIndex > 0 ||
+                    selectedTab == SonoraTab.Music -> musicListState.firstVisibleItemIndex > 0 ||
                         musicListState.firstVisibleItemScrollOffset > dismissThreshold
 
-                    selectedTab == M2Tab.Playlists -> playlistsListState.firstVisibleItemIndex > 0 ||
+                    selectedTab == SonoraTab.Playlists -> playlistsListState.firstVisibleItemIndex > 0 ||
                         playlistsListState.firstVisibleItemScrollOffset > dismissThreshold
 
                     else -> false
                 }
 
                 val hasQuery = when {
-                    showMusicPage -> musicQuery.isNotBlank()
+                    showMusicPage -> myMusicQuery.isNotBlank()
                     showFavoritesPage -> favoritesQuery.isNotBlank()
                     showPlaylistsListPage -> playlistsQuery.isNotBlank()
-                    selectedTab == M2Tab.Home -> false
-                    selectedTab == M2Tab.Music -> musicQuery.isNotBlank()
+                    selectedTab == SonoraTab.Home -> false
+                    selectedTab == SonoraTab.Music -> searchQuery.isNotBlank()
                     else -> playlistsQuery.isNotBlank()
                 }
                 val pullRevealEnabled = inPlaylistDetail || isCollectionsSubpage
@@ -480,9 +510,9 @@ private fun M2App() {
     }
 
     val tabSpecs = listOf(
-        M2TabSpec(M2Tab.Music, "Search", R.drawable.ic_global_magnifyingglass),
-        M2TabSpec(M2Tab.Home, "Home", R.drawable.tab_home),
-        M2TabSpec(M2Tab.Playlists, "Collections", R.drawable.tab_lib)
+        SonoraTabSpec(SonoraTab.Music, "Search", R.drawable.ic_global_magnifyingglass),
+        SonoraTabSpec(SonoraTab.Home, "Home", R.drawable.tab_home),
+        SonoraTabSpec(SonoraTab.Playlists, "Collections", R.drawable.tab_lib)
     )
 
     val favoriteTracks = remember(tracks) { tracks.filter { it.isFavorite } }
@@ -579,16 +609,9 @@ private fun M2App() {
             return@LaunchedEffect
         }
 
-        val queueMatches = playbackController.isQueueMatching(homeWaveTracks)
-        if (queueMatches) {
-            val liveTrackID = playbackController.currentTrackId
-            if (!liveTrackID.isNullOrBlank() && homeWaveTracks.any { it.id == liveTrackID }) {
-                homeWaveDisplayTrackID = liveTrackID
-            } else if (homeWaveDisplayTrackID.isNullOrBlank() ||
-                homeWaveTracks.none { it.id == homeWaveDisplayTrackID }
-            ) {
-                homeWaveDisplayTrackID = homeWaveStartTrack?.id ?: homeWaveTracks.first().id
-            }
+        val liveTrackID = playbackController.currentTrackId
+        if (!liveTrackID.isNullOrBlank() && homeWaveTracks.any { it.id == liveTrackID }) {
+            homeWaveDisplayTrackID = liveTrackID
         } else if (homeWaveDisplayTrackID.isNullOrBlank() ||
             homeWaveTracks.none { it.id == homeWaveDisplayTrackID }
         ) {
@@ -619,11 +642,11 @@ private fun M2App() {
         buildHomeAlbumItems(tracks, limit = 14)
     }
 
-    val musicFiltered = remember(tracks, musicQuery) {
-        tracks.filter { it.matchesQuery(musicQuery) }
+    val myMusicFiltered = remember(tracks, myMusicQuery) {
+        tracks.filter { it.matchesQuery(myMusicQuery) }
     }
-    val musicPlaylistsFiltered = remember(allPlaylists, musicQuery) {
-        val normalized = musicQuery.trim().lowercase()
+    val searchPlaylistsFiltered = remember(allPlaylists, searchQuery) {
+        val normalized = searchQuery.trim().lowercase()
         if (normalized.isBlank()) {
             allPlaylists.take(8)
         } else {
@@ -632,18 +655,19 @@ private fun M2App() {
             }.take(8)
         }
     }
-    val musicArtistsFiltered = remember(tracks, musicQuery) {
+    val searchArtistsFiltered = remember(tracks, searchQuery) {
         buildSearchArtistItems(
             tracks = tracks,
-            query = musicQuery,
+            query = searchQuery,
             limit = 12
         )
     }
-    val musicTracksForSearch = remember(musicFiltered, musicQuery) {
-        if (musicQuery.trim().isBlank()) {
-            musicFiltered.take(36)
+    val searchTracksForSearch = remember(tracks, searchQuery) {
+        val directMatches = tracks.filter { it.matchesQuery(searchQuery) }
+        if (searchQuery.trim().isBlank()) {
+            tracks.take(36)
         } else {
-            musicFiltered
+            directMatches
         }
     }
     val playlistsFiltered = remember(allPlaylists, playlistsQuery) {
@@ -707,7 +731,7 @@ private fun M2App() {
     }
 
     LaunchedEffect(selectedTab) {
-        if (selectedTab == M2Tab.Home) {
+        if (selectedTab == SonoraTab.Home) {
             if (!wasHomeSelected) {
                 homeVisitCount += 1
                 wasHomeSelected = true
@@ -761,6 +785,39 @@ private fun M2App() {
         val removed = playlistStore.removeTrackId(playlistID, trackID)
         if (removed) {
             reloadPlaylists()
+        }
+    }
+
+    fun clearTrackSelection() {
+        trackSelectionContext = null
+        selectedTrackIDs = emptySet()
+    }
+
+    fun toggleTrackSelection(
+        context: TrackSelectionContext,
+        trackID: String,
+        forceSelect: Boolean = false
+    ) {
+        if (trackID.isBlank()) {
+            return
+        }
+
+        if (trackSelectionContext != context) {
+            trackSelectionContext = context
+            selectedTrackIDs = setOf(trackID)
+            return
+        }
+
+        val currentlySelected = selectedTrackIDs.contains(trackID)
+        selectedTrackIDs = when {
+            forceSelect && !currentlySelected -> selectedTrackIDs + trackID
+            forceSelect && currentlySelected -> selectedTrackIDs
+            currentlySelected -> selectedTrackIDs - trackID
+            else -> selectedTrackIDs + trackID
+        }
+
+        if (selectedTrackIDs.isEmpty()) {
+            trackSelectionContext = null
         }
     }
 
@@ -823,9 +880,9 @@ private fun M2App() {
     }
 
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    val tabBarBackground = if (isDark) M2TabBarDark else M2TabBarLight
-    val tabActiveColor = if (isDark) M2TabActiveDark else M2TabActiveLight
-    val tabInactiveColor = if (isDark) M2TabInactiveDark else M2TabInactiveLight
+    val tabBarBackground = if (isDark) SonoraTabBarDark else SonoraTabBarLight
+    val tabActiveColor = if (isDark) SonoraTabActiveDark else SonoraTabActiveLight
+    val tabInactiveColor = if (isDark) SonoraTabInactiveDark else SonoraTabInactiveLight
 
     val isCreateNameScreen = playlistCreateStep == PlaylistCreateStep.Name
     val isCreateTracksScreen = playlistCreateStep == PlaylistCreateStep.Tracks
@@ -834,11 +891,35 @@ private fun M2App() {
     val inSubPage = showHistoryPage || showSettingsPage || showFavoritesPage || showPlaylistsListPage || showMusicPage
 
     val inPlaylistDetail = openedDetailPlaylist != null
-    val isRootSearchPage = (selectedTab == M2Tab.Music) && !inSubPage && !inPlaylistDetail
+    val isRootSearchPage = (selectedTab == SonoraTab.Music) && !inSubPage && !inPlaylistDetail
     val showCompactPlaylistTitle = inPlaylistDetail && (
         playlistDetailListState.firstVisibleItemIndex > 0 ||
             playlistDetailListState.firstVisibleItemScrollOffset > compactPlaylistTitleThreshold
         )
+    val activeTrackSelectionContext = when {
+        showMusicPage -> TrackSelectionContext.Music
+        showFavoritesPage -> TrackSelectionContext.Favorites
+        inPlaylistDetail && openedDetailPlaylist?.isUser == true -> TrackSelectionContext.PlaylistDetail
+        else -> null
+    }
+    val isTrackSelectionMode = selectedTrackIDs.isNotEmpty() &&
+        trackSelectionContext != null &&
+        trackSelectionContext == activeTrackSelectionContext
+    val selectedTrackCount = if (isTrackSelectionMode) selectedTrackIDs.size else 0
+    val isRootHomePage = !inPlaylistDetail && !inSubPage && selectedTab == SonoraTab.Home
+
+    LaunchedEffect(activeTrackSelectionContext) {
+        if (trackSelectionContext != null && trackSelectionContext != activeTrackSelectionContext) {
+            clearTrackSelection()
+        }
+    }
+
+    LaunchedEffect(isTrackSelectionMode) {
+        if (isTrackSelectionMode) {
+            showSearch = false
+        }
+    }
+
     val miniPlayerTrack = playbackController.currentTrack
     val miniPlayerVisible = !inPlaylistDetail &&
         !inOverlayScreen &&
@@ -848,32 +929,34 @@ private fun M2App() {
     val listBottomInset = if (miniPlayerVisible) 76.dp else 2.dp
 
     val title = when {
+        isTrackSelectionMode -> "$selectedTrackCount Selected"
         inPlaylistDetail -> if (showCompactPlaylistTitle) (openedDetailPlaylist?.name ?: "Playlist") else ""
         showHistoryPage -> "History"
         showSettingsPage -> "Settings"
         showFavoritesPage -> "Favorites"
         showPlaylistsListPage -> "Playlists"
         showMusicPage -> "Music"
-        selectedTab == M2Tab.Home -> "Home"
-        selectedTab == M2Tab.Music -> "Search"
+        selectedTab == SonoraTab.Home -> "Home"
+        selectedTab == SonoraTab.Music -> "Search"
         else -> "Collections"
     }
 
     val activeSearchQuery = when {
         inPlaylistDetail -> ""
-        showMusicPage -> musicQuery
+        showMusicPage -> myMusicQuery
         showFavoritesPage -> favoritesQuery
-        selectedTab == M2Tab.Music -> musicQuery
-        selectedTab == M2Tab.Playlists -> playlistsQuery
+        selectedTab == SonoraTab.Music -> searchQuery
+        selectedTab == SonoraTab.Playlists -> playlistsQuery
         else -> ""
     }
     val activeSearchPlaceholder = when {
         showMusicPage || showFavoritesPage -> "Search"
-        selectedTab == M2Tab.Music -> "Search"
-        selectedTab == M2Tab.Playlists -> "Search Collections"
+        selectedTab == SonoraTab.Music -> "Search"
+        selectedTab == SonoraTab.Playlists -> "Search Collections"
         else -> ""
     }
     val searchVisible = when {
+        isTrackSelectionMode -> false
         inPlaylistDetail -> false
         isRootSearchPage -> true
         else -> showSearch || activeSearchQuery.isNotBlank()
@@ -891,15 +974,77 @@ private fun M2App() {
 
     val onSearchQueryChange: (String) -> Unit = { value ->
         when {
-            showMusicPage -> musicQuery = value
+            showMusicPage -> myMusicQuery = value
             showFavoritesPage -> favoritesQuery = value
             else -> when (selectedTab) {
-                M2Tab.Home -> Unit
-                M2Tab.Music -> musicQuery = value
-                M2Tab.Playlists -> playlistsQuery = value
+                SonoraTab.Home -> Unit
+                SonoraTab.Music -> searchQuery = value
+                SonoraTab.Playlists -> playlistsQuery = value
             }
         }
     }
+
+    val onSelectionFavoriteTap: () -> Unit = {
+        if (isTrackSelectionMode && selectedTrackIDs.isNotEmpty()) {
+            val targetIDs = selectedTrackIDs
+            val updated = tracks.map { track ->
+                if (targetIDs.contains(track.id) && !track.isFavorite) {
+                    track.copy(isFavorite = true)
+                } else {
+                    track
+                }
+            }
+            persistTracks(updated)
+            clearTrackSelection()
+            scope.launch {
+                snackbarHostState.showSnackbar("Added to favorites")
+            }
+        }
+    }
+
+    val onSelectionDeleteTap: () -> Unit = {
+        if (isTrackSelectionMode && selectedTrackIDs.isNotEmpty()) {
+            val targetIDs = selectedTrackIDs.toList()
+            when (trackSelectionContext) {
+                TrackSelectionContext.Music -> {
+                    targetIDs.forEach { trackID ->
+                        deleteTrackFromLibrary(trackID)
+                    }
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Deleted ${targetIDs.size} track(s)")
+                    }
+                }
+
+                TrackSelectionContext.Favorites -> {
+                    val updated = tracks.map { track ->
+                        if (targetIDs.contains(track.id) && track.isFavorite) {
+                            track.copy(isFavorite = false)
+                        } else {
+                            track
+                        }
+                    }
+                    persistTracks(updated)
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Removed from favorites")
+                    }
+                }
+
+                TrackSelectionContext.PlaylistDetail -> {
+                    targetIDs.forEach { trackID ->
+                        removeTrackFromOpenedPlaylist(trackID)
+                    }
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Removed from playlist")
+                    }
+                }
+
+                null -> Unit
+            }
+            clearTrackSelection()
+        }
+    }
+
+    val showScaffoldTopBar = !playerVisible && !inOverlayScreen && !isRootHomePage
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -907,7 +1052,7 @@ private fun M2App() {
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            if (!playerVisible && !inOverlayScreen) {
+            if (showScaffoldTopBar) {
                 Column(
                     modifier = Modifier.statusBarsPadding()
                 ) {
@@ -971,9 +1116,15 @@ private fun M2App() {
 
                                     Text(
                                         text = title,
-                                        style = if (showFavoritesPage || showPlaylistsListPage || showMusicPage) {
+                                        style = if (isTrackSelectionMode) {
                                             TextStyle(
-                                                fontFamily = M2AndroidYSMusicFontFamily,
+                                                fontFamily = SonoraAndroidYSMusicFontFamily,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 28.sp
+                                            )
+                                        } else if (showFavoritesPage || showPlaylistsListPage || showMusicPage) {
+                                            TextStyle(
+                                                fontFamily = SonoraAndroidYSMusicFontFamily,
                                                 fontWeight = FontWeight.Bold,
                                                 fontSize = 28.sp
                                             )
@@ -1006,9 +1157,9 @@ private fun M2App() {
                                 ) {
                                     Text(
                                         text = title,
-                                        style = if (selectedTab == M2Tab.Home) {
+                                        style = if (selectedTab == SonoraTab.Home) {
                                             TextStyle(
-                                                fontFamily = M2AndroidYSMusicFontFamily,
+                                                fontFamily = SonoraAndroidYSMusicFontFamily,
                                                 fontWeight = FontWeight.Bold,
                                                 fontSize = 30.sp
                                             )
@@ -1028,6 +1179,31 @@ private fun M2App() {
                                 horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 when {
+                                    isTrackSelectionMode -> {
+                                        AppVectorIconButton(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Cancel selection",
+                                            tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
+                                            onClick = { clearTrackSelection() }
+                                        )
+                                        AppIconButton(
+                                            iconRes = R.drawable.heart_fill,
+                                            contentDescription = "Favorite selected",
+                                            iconWidth = 20.dp,
+                                            iconHeight = 20.dp,
+                                            tint = Color(0xFFFF5966),
+                                            onClick = onSelectionFavoriteTap
+                                        )
+                                        AppIconButton(
+                                            iconRes = R.drawable.ic_global_trash_fill,
+                                            contentDescription = "Delete selected",
+                                            iconWidth = 20.dp,
+                                            iconHeight = 20.dp,
+                                            tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
+                                            onClick = onSelectionDeleteTap
+                                        )
+                                    }
+
                                     inPlaylistDetail && openedDetailPlaylist?.isUser == true -> {
                                         AppIconButton(
                                             iconRes = R.drawable.ic_global_ellipsis,
@@ -1057,7 +1233,7 @@ private fun M2App() {
                                             iconHeight = 18.dp,
                                             tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
                                             onClick = {
-                                                showSearch = true
+                                                showSearch = !(showSearch && myMusicQuery.isBlank())
                                                 pullRevealDistance = 0f
                                                 pullHideDistance = 0f
                                             }
@@ -1095,17 +1271,19 @@ private fun M2App() {
                                         )
                                     }
 
-                                    !inPlaylistDetail && !inSubPage && selectedTab == M2Tab.Home -> {
-                                        AppIconButton(
-                                            iconRes = R.drawable.ic_global_clock,
-                                            contentDescription = "History",
-                                            iconWidth = 18.dp,
-                                            iconHeight = 18.dp,
-                                            tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
-                                            onClick = {
-                                                showHistoryPage = true
-                                            }
-                                        )
+                                    !inPlaylistDetail && !inSubPage && selectedTab == SonoraTab.Home -> {
+                                        if (tracks.isNotEmpty()) {
+                                            AppIconButton(
+                                                iconRes = R.drawable.ic_global_clock,
+                                                contentDescription = "History",
+                                                iconWidth = 18.dp,
+                                                iconHeight = 18.dp,
+                                                tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
+                                                onClick = {
+                                                    showHistoryPage = true
+                                                }
+                                            )
+                                        }
                                     }
 
                                 }
@@ -1146,9 +1324,11 @@ private fun M2App() {
                         }
                     }
 
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-                    )
+                    if (!isRootHomePage) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                        )
+                    }
                 }
             }
         },
@@ -1158,41 +1338,50 @@ private fun M2App() {
                     HorizontalDivider(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
                     )
-                    NavigationBar(
-                        containerColor = tabBarBackground,
-                        modifier = Modifier.height(49.dp),
-                        windowInsets = WindowInsets(0, 0, 0, 0)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(tabBarBackground)
+                            .navigationBarsPadding()
                     ) {
-                        tabSpecs.forEach { spec ->
-                            val selected = selectedTab == spec.tab
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = {
-                                    if (spec.tab == M2Tab.Music) {
-                                        showMusicPage = false
-                                    }
-                                    selectedTab = spec.tab
-                                    showHistoryPage = false
-                                    showSettingsPage = false
-                                    showFavoritesPage = false
-                                    showPlaylistsListPage = false
-                                    openedPlaylistID = null
-                                    openedHomeAlbumArtistKey = null
-                                },
-                                icon = {
-                                    val iconSize = if (spec.tab == M2Tab.Home) 22.dp else 20.dp
-                                    Icon(
-                                        painter = painterResource(spec.iconRes),
-                                        contentDescription = spec.title,
-                                        modifier = Modifier.size(iconSize),
-                                        tint = if (selected) tabActiveColor else tabInactiveColor
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    indicatorColor = Color.Transparent
-                                ),
-                                alwaysShowLabel = false
-                            )
+                        NavigationBar(
+                            containerColor = tabBarBackground,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(49.dp),
+                            windowInsets = WindowInsets(0, 0, 0, 0)
+                        ) {
+                            tabSpecs.forEach { spec ->
+                                val selected = selectedTab == spec.tab
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = {
+                                        if (spec.tab == SonoraTab.Music) {
+                                            showMusicPage = false
+                                        }
+                                        selectedTab = spec.tab
+                                        showHistoryPage = false
+                                        showSettingsPage = false
+                                        showFavoritesPage = false
+                                        showPlaylistsListPage = false
+                                        openedPlaylistID = null
+                                        openedHomeAlbumArtistKey = null
+                                    },
+                                    icon = {
+                                        val iconSize = if (spec.tab == SonoraTab.Home) 22.dp else 20.dp
+                                        Icon(
+                                            painter = painterResource(spec.iconRes),
+                                            contentDescription = spec.title,
+                                            modifier = Modifier.size(iconSize),
+                                            tint = if (selected) tabActiveColor else tabInactiveColor
+                                        )
+                                    },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        indicatorColor = Color.Transparent
+                                    ),
+                                    alwaysShowLabel = false
+                                )
+                            }
                         }
                     }
                 }
@@ -1206,6 +1395,50 @@ private fun M2App() {
                 .padding(innerPadding)
                 .nestedScroll(nestedScrollConnection)
         ) {
+            if (isRootHomePage && !playerVisible && !inOverlayScreen) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(44.dp)
+                        .padding(horizontal = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            Text(
+                                text = "Home",
+                                style = TextStyle(
+                                    fontFamily = SonoraAndroidYSMusicFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 30.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        if (tracks.isNotEmpty()) {
+                            AppIconButton(
+                                iconRes = R.drawable.ic_global_clock,
+                                contentDescription = "History",
+                                iconWidth = 18.dp,
+                                iconHeight = 18.dp,
+                                tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
+                                onClick = { showHistoryPage = true }
+                            )
+                        }
+                    }
+                }
+            }
+
             when {
                 isCreateNameScreen -> PlaylistCreateNamePage(
                     name = playlistCreateName,
@@ -1306,6 +1539,7 @@ private fun M2App() {
 
                 inPlaylistDetail -> SwipeDismissPage(
                     onDismiss = {
+                        clearTrackSelection()
                         openedPlaylistID = null
                         openedHomeAlbumArtistKey = null
                     }
@@ -1319,12 +1553,24 @@ private fun M2App() {
                         isPlaying = playbackController.isPlaying,
                         isCurrentQueueMatching = playbackController.isQueueMatching(openedDetailTracks),
                         isSleepTimerActive = playbackController.isSleepTimerActive,
+                        selectionMode = isTrackSelectionMode &&
+                            trackSelectionContext == TrackSelectionContext.PlaylistDetail,
+                        selectedTrackIDs = selectedTrackIDs,
                         onTrackTap = { tapped ->
-                            playbackController.playOrToggleFromQueue(
-                                queue = openedDetailTracks,
-                                targetTrackId = tapped.id
-                            )
-                            playerVisible = true
+                            if (isTrackSelectionMode &&
+                                trackSelectionContext == TrackSelectionContext.PlaylistDetail
+                            ) {
+                                toggleTrackSelection(
+                                    context = TrackSelectionContext.PlaylistDetail,
+                                    trackID = tapped.id
+                                )
+                            } else {
+                                playbackController.playOrToggleFromQueue(
+                                    queue = openedDetailTracks,
+                                    targetTrackId = tapped.id
+                                )
+                                playerVisible = true
+                            }
                         },
                         onHeaderPlayPauseTap = {
                             if (openedDetailTracks.isNotEmpty()) {
@@ -1356,9 +1602,17 @@ private fun M2App() {
                         },
                         onHeaderSleepTap = { showSleepTimerDialog = true },
                         onTrackLongPress = { track ->
-                            onFavoriteToggle(track.id)
-                            scope.launch {
-                                snackbarHostState.showSnackbar("Favorite state updated")
+                            if (openedDetailPlaylist?.isUser == true) {
+                                toggleTrackSelection(
+                                    context = TrackSelectionContext.PlaylistDetail,
+                                    trackID = track.id,
+                                    forceSelect = true
+                                )
+                            } else {
+                                onFavoriteToggle(track.id)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar("Favorite state updated")
+                                }
                             }
                         },
                         onTrackSwipeFavorite = { track ->
@@ -1408,18 +1662,31 @@ private fun M2App() {
                         bottomInset = listBottomInset,
                         currentTrackID = playbackController.currentTrackId,
                         isPlaying = playbackController.isPlaying,
+                        selectionMode = isTrackSelectionMode &&
+                            trackSelectionContext == TrackSelectionContext.Favorites,
+                        selectedTrackIDs = selectedTrackIDs,
                         onTrackTap = { tapped ->
-                            playbackController.playOrToggleFromQueue(
-                                queue = favoriteTracks,
-                                targetTrackId = tapped.id
-                            )
-                            playerVisible = true
+                            if (isTrackSelectionMode &&
+                                trackSelectionContext == TrackSelectionContext.Favorites
+                            ) {
+                                toggleTrackSelection(
+                                    context = TrackSelectionContext.Favorites,
+                                    trackID = tapped.id
+                                )
+                            } else {
+                                playbackController.playOrToggleFromQueue(
+                                    queue = favoriteTracks,
+                                    targetTrackId = tapped.id
+                                )
+                                playerVisible = true
+                            }
                         },
                         onTrackLongPress = { track ->
-                            onFavoriteToggle(track.id)
-                            scope.launch {
-                                snackbarHostState.showSnackbar("Removed from favorites")
-                            }
+                            toggleTrackSelection(
+                                context = TrackSelectionContext.Favorites,
+                                trackID = track.id,
+                                forceSelect = true
+                            )
                         },
                         onTrackSwipeUnfavorite = { track ->
                             onFavoriteToggle(track.id)
@@ -1453,20 +1720,30 @@ private fun M2App() {
                     )
                 }
 
-                selectedTab == M2Tab.Home -> HomePage(
+                tracks.isEmpty() -> FirstMusicOnboardingPage(
+                    onAddMusicTap = {
+                        addMusicLauncher.launch(arrayOf("audio/*"))
+                    }
+                )
+
+                selectedTab == SonoraTab.Home -> HomePage(
                     listState = homeListState,
                     waveQueue = homeWaveTracks,
                     waveStartTrack = homeWaveDisplayTrack,
                     tasteTracks = homeTasteTracks,
                     freshChoiceTracks = homeFreshChoiceTracks,
-                    isWavePlaying = playbackController.isQueueMatching(homeWaveTracks) && playbackController.isPlaying,
+                    isWavePlaying = !playbackController.currentTrackId.isNullOrBlank() &&
+                        homeWaveTracks.any { it.id == playbackController.currentTrackId } &&
+                        playbackController.isPlaying,
+                    topInset = 52.dp,
                     bottomInset = listBottomInset,
                     onWaveToggleTap = {
-                        val waveTarget = homeWaveStartTrack ?: homeWaveTracks.firstOrNull()
+                        val waveTarget = homeWaveDisplayTrack ?: homeWaveStartTrack ?: homeWaveTracks.firstOrNull()
+                        val liveTrackID = playbackController.currentTrackId
+                        val currentInWave = !liveTrackID.isNullOrBlank() &&
+                            homeWaveTracks.any { it.id == liveTrackID }
                         if (waveTarget != null) {
-                            if (playbackController.isQueueMatching(homeWaveTracks) &&
-                                playbackController.currentTrackId != null
-                            ) {
+                            if (currentInWave) {
                                 playbackController.togglePlayPause()
                             } else {
                                 playbackController.playOrToggleFromQueue(
@@ -1497,27 +1774,35 @@ private fun M2App() {
                     MusicPage(
                     listState = musicListState,
                     tracks = tracks,
-                    filteredTracks = musicFiltered,
+                    filteredTracks = myMusicFiltered,
                     bottomInset = listBottomInset,
                     currentTrackID = playbackController.currentTrackId,
                     isPlaying = playbackController.isPlaying,
+                    selectionMode = isTrackSelectionMode &&
+                        trackSelectionContext == TrackSelectionContext.Music,
+                    selectedTrackIDs = selectedTrackIDs,
                     onTrackTap = { tapped ->
-                        playbackController.playOrToggleFromQueue(
-                            queue = tracks,
-                            targetTrackId = tapped.id
-                        )
-                        playerVisible = true
+                        if (isTrackSelectionMode &&
+                            trackSelectionContext == TrackSelectionContext.Music
+                        ) {
+                            toggleTrackSelection(
+                                context = TrackSelectionContext.Music,
+                                trackID = tapped.id
+                            )
+                        } else {
+                            playbackController.playOrToggleFromQueue(
+                                queue = tracks,
+                                targetTrackId = tapped.id
+                            )
+                            playerVisible = true
+                        }
                     },
                     onTrackLongPress = { track ->
-                        onFavoriteToggle(track.id)
-                        scope.launch {
-                            val message = if (track.isFavorite) {
-                                "Removed from favorites"
-                            } else {
-                                "Added to favorites"
-                            }
-                            snackbarHostState.showSnackbar(message)
-                        }
+                        toggleTrackSelection(
+                            context = TrackSelectionContext.Music,
+                            trackID = track.id,
+                            forceSelect = true
+                        )
                     },
                     onTrackSwipeFavoriteToggle = { track ->
                         onFavoriteToggle(track.id)
@@ -1542,12 +1827,12 @@ private fun M2App() {
                 )
                 }
 
-                selectedTab == M2Tab.Music -> SearchPage(
+                selectedTab == SonoraTab.Music -> SearchPage(
                     listState = musicListState,
-                    searchQuery = musicQuery,
-                    trackResults = musicTracksForSearch,
-                    playlistResults = musicPlaylistsFiltered,
-                    artistResults = musicArtistsFiltered,
+                    searchQuery = searchQuery,
+                    trackResults = searchTracksForSearch,
+                    playlistResults = searchPlaylistsFiltered,
+                    artistResults = searchArtistsFiltered,
                     trackByID = trackByID,
                     bottomInset = listBottomInset,
                     onTrackTap = { tapped ->
@@ -1561,12 +1846,12 @@ private fun M2App() {
                         openedPlaylistID = playlist.id
                     },
                     onArtistTap = { artist ->
-                        musicQuery = artist.title
+                        searchQuery = artist.title
                         showSearch = true
                     }
                 )
 
-                selectedTab == M2Tab.Playlists -> PlaylistsPage(
+                selectedTab == SonoraTab.Playlists -> PlaylistsPage(
                     listState = playlistsListState,
                     playlists = playlistsFiltered,
                     trackByID = trackByID,
@@ -1952,6 +2237,33 @@ private fun AppIconButton(
 }
 
 @Composable
+private fun AppVectorIconButton(
+    imageVector: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    iconSize: Dp = 20.dp,
+    touchSize: Dp = 32.dp,
+    enabled: Boolean = true,
+    tint: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Box(
+        modifier = Modifier
+            .size(touchSize)
+            .alpha(if (enabled) 1f else 0.45f)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(iconSize)
+        )
+    }
+}
+
+@Composable
 private fun SearchField(
     value: String,
     onValueChange: (String) -> Unit,
@@ -2192,7 +2504,7 @@ private fun PlaylistCreateNamePage(
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.End,
                     style = TextStyle(
-                        fontFamily = M2AndroidSFProSemiboldFamily,
+                        fontFamily = SonoraAndroidSFProSemiboldFamily,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     ),
@@ -2210,7 +2522,7 @@ private fun PlaylistCreateNamePage(
                 .clip(RoundedCornerShape(14.dp))
                 .clickable(enabled = canContinue, onClick = onNext),
             color = if (canContinue) {
-                ru.hippo.M2.ui.theme.M2AccentYellow
+                ru.hippo.Sonora.ui.theme.SonoraAccentYellow
             } else {
                 Color(0xFF999999).copy(alpha = 0.4f)
             }
@@ -2395,7 +2707,7 @@ private fun SelectableTrackRow(
             text = formatDuration(track.durationMs),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = TextStyle(
-                fontFamily = M2AndroidSFProSemiboldFamily,
+                fontFamily = SonoraAndroidSFProSemiboldFamily,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold
             ),
@@ -2409,7 +2721,7 @@ private fun SelectableTrackRow(
             Icon(
                 imageVector = Icons.Filled.Check,
                 contentDescription = "Selected",
-                tint = ru.hippo.M2.ui.theme.M2AccentYellow,
+                tint = ru.hippo.Sonora.ui.theme.SonoraAccentYellow,
                 modifier = Modifier.size(18.dp)
             )
         } else {
@@ -2426,6 +2738,8 @@ private fun MusicPage(
     bottomInset: androidx.compose.ui.unit.Dp,
     currentTrackID: String?,
     isPlaying: Boolean,
+    selectionMode: Boolean,
+    selectedTrackIDs: Set<String>,
     onTrackTap: (TrackItem) -> Unit,
     onTrackLongPress: (TrackItem) -> Unit,
     onTrackSwipeFavoriteToggle: (TrackItem) -> Unit,
@@ -2434,7 +2748,7 @@ private fun MusicPage(
 ) {
     if (filteredTracks.isEmpty()) {
         val message = if (tracks.isEmpty()) {
-            "No music files in On My iPhone/M2/M2"
+            "No music files in On My iPhone/Sonora/Sonora"
         } else {
             "No search results."
         }
@@ -2452,35 +2766,45 @@ private fun MusicPage(
                 track = track,
                 isCurrent = currentTrackID == track.id,
                 showsPlaybackIndicator = (currentTrackID == track.id && isPlaying),
+                selectionMode = selectionMode,
+                isSelected = selectedTrackIDs.contains(track.id),
                 onClick = { onTrackTap(track) },
                 onLongPress = { onTrackLongPress(track) },
-                startActions = listOf(
-                    SwipeTrackAction(
-                        label = if (track.isFavorite) "Unfav" else "Fav",
-                        backgroundColor = if (track.isFavorite) {
-                            Color(0xFF6A6A6A)
-                        } else {
-                            Color(0xFFFF5966)
-                        },
-                        iconRes = if (track.isFavorite) R.drawable.heart_slash_fill else R.drawable.heart_fill,
-                        onAction = { onTrackSwipeFavoriteToggle(track) },
-                        fullSwipeEnabled = true
+                startActions = if (selectionMode) {
+                    emptyList()
+                } else {
+                    listOf(
+                        SwipeTrackAction(
+                            label = if (track.isFavorite) "Unfav" else "Fav",
+                            backgroundColor = if (track.isFavorite) {
+                                Color(0xFF6A6A6A)
+                            } else {
+                                Color(0xFFFF5966)
+                            },
+                            iconRes = if (track.isFavorite) R.drawable.heart_slash_fill else R.drawable.heart_fill,
+                            onAction = { onTrackSwipeFavoriteToggle(track) },
+                            fullSwipeEnabled = true
+                        )
                     )
-                ),
-                endActions = listOf(
-                    SwipeTrackAction(
-                        label = "Delete",
-                        backgroundColor = Color(0xFFFF3B30),
-                        iconRes = R.drawable.ic_global_trash_fill,
-                        onAction = { onTrackSwipeDelete(track) }
-                    ),
-                    SwipeTrackAction(
-                        label = "Add",
-                        backgroundColor = Color(0xFF2979F2),
-                        iconRes = R.drawable.ic_global_text_badge_plus,
-                        onAction = { onTrackSwipeAddToPlaylist(track) }
+                },
+                endActions = if (selectionMode) {
+                    emptyList()
+                } else {
+                    listOf(
+                        SwipeTrackAction(
+                            label = "Delete",
+                            backgroundColor = Color(0xFFFF3B30),
+                            iconRes = R.drawable.ic_global_trash_fill,
+                            onAction = { onTrackSwipeDelete(track) }
+                        ),
+                        SwipeTrackAction(
+                            label = "Add",
+                            backgroundColor = Color(0xFF2979F2),
+                            iconRes = R.drawable.ic_global_text_badge_plus,
+                            onAction = { onTrackSwipeAddToPlaylist(track) }
+                        )
                     )
-                )
+                }
             )
             if (index < filteredTracks.lastIndex) {
                 HorizontalDivider(
@@ -2605,7 +2929,7 @@ private fun SearchIntroCard() {
         Text(
             text = "Search",
             style = TextStyle(
-                fontFamily = M2AndroidHomeHeadingFontFamily,
+                fontFamily = SonoraAndroidHomeHeadingFontFamily,
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 22.sp
             ),
@@ -2627,7 +2951,7 @@ private fun SearchSectionHeading(text: String) {
     Text(
         text = text,
         style = TextStyle(
-            fontFamily = M2AndroidYSMusicFontFamily,
+            fontFamily = SonoraAndroidYSMusicFontFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 24.sp
         ),
@@ -2738,13 +3062,14 @@ private fun HomePage(
     tasteTracks: List<TrackItem>,
     freshChoiceTracks: List<TrackItem>,
     isWavePlaying: Boolean,
+    topInset: androidx.compose.ui.unit.Dp = 0.dp,
     bottomInset: androidx.compose.ui.unit.Dp,
     onWaveToggleTap: () -> Unit,
     onTasteTap: (TrackItem) -> Unit,
     onFreshChoiceTap: (TrackItem) -> Unit
 ) {
     if (waveQueue.isEmpty()) {
-        EmptyListLabel(text = "No music files in On My iPhone/M2/M2")
+        EmptyListLabel(text = "No music files in On My iPhone/Sonora/Sonora")
         return
     }
     val waveTrack = waveStartTrack ?: waveQueue.firstOrNull()
@@ -2752,7 +3077,7 @@ private fun HomePage(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 4.dp, bottom = bottomInset)
+        contentPadding = PaddingValues(top = topInset + 4.dp, bottom = bottomInset)
     ) {
         if (waveTrack != null) {
             item(key = "home_wave") {
@@ -2761,25 +3086,6 @@ private fun HomePage(
                     isPlaying = isWavePlaying,
                     onPlayToggle = onWaveToggleTap
                 )
-            }
-        }
-
-        if (tasteTracks.isNotEmpty()) {
-            item(key = "home_need_this_heading") {
-                HomeSectionHeading(text = "Based on your taste")
-            }
-            item(key = "home_need_this_row") {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(tasteTracks, key = { it.id }) { track ->
-                        HomeRecommendationCard(
-                            track = track,
-                            onClick = { onTasteTap(track) }
-                        )
-                    }
-                }
             }
         }
 
@@ -2814,6 +3120,25 @@ private fun HomePage(
                 }
             }
         }
+
+        if (tasteTracks.isNotEmpty()) {
+            item(key = "home_need_this_heading") {
+                HomeSectionHeading(text = "Based on your taste")
+            }
+            item(key = "home_need_this_row") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(tasteTracks, key = { it.id }) { track ->
+                        HomeRecommendationCard(
+                            track = track,
+                            onClick = { onTasteTap(track) }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2822,7 +3147,7 @@ private fun HomeSectionHeading(text: String) {
     Text(
         text = text,
         style = TextStyle(
-            fontFamily = M2AndroidHomeHeadingFontFamily,
+            fontFamily = SonoraAndroidHomeHeadingFontFamily,
             fontWeight = FontWeight.ExtraBold,
             fontSize = 24.sp
         ),
@@ -2838,7 +3163,7 @@ private fun CollectionsSectionHeading(text: String) {
     Text(
         text = text,
         style = TextStyle(
-            fontFamily = M2AndroidYSMusicFontFamily,
+            fontFamily = SonoraAndroidYSMusicFontFamily,
             fontWeight = FontWeight.Bold,
             fontSize = 23.sp
         ),
@@ -2988,7 +3313,7 @@ private fun HomeMyWaveCard(
             Text(
                 text = "My wave",
                 style = TextStyle(
-                    fontFamily = M2AndroidHomeHeadingFontFamily,
+                    fontFamily = SonoraAndroidHomeHeadingFontFamily,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 34.sp
                 ),
@@ -3687,7 +4012,7 @@ private fun PlaylistsPage(
                 Text(
                     text = "My playlists",
                     style = TextStyle(
-                        fontFamily = M2AndroidYSMusicFontFamily,
+                        fontFamily = SonoraAndroidYSMusicFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 24.sp
                     ),
@@ -3697,7 +4022,7 @@ private fun PlaylistsPage(
                 Text(
                     text = "›",
                     style = TextStyle(
-                        fontFamily = M2AndroidYSMusicFontFamily,
+                        fontFamily = SonoraAndroidYSMusicFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 22.sp
                     ),
@@ -3791,7 +4116,7 @@ private fun PlaylistsPage(
                     Text(
                         text = "My music",
                         style = TextStyle(
-                            fontFamily = M2AndroidYSMusicFontFamily,
+                            fontFamily = SonoraAndroidYSMusicFontFamily,
                             fontWeight = FontWeight.Bold,
                             fontSize = 23.sp
                         ),
@@ -3801,7 +4126,7 @@ private fun PlaylistsPage(
                     Text(
                         text = "›",
                         style = TextStyle(
-                            fontFamily = M2AndroidYSMusicFontFamily,
+                            fontFamily = SonoraAndroidYSMusicFontFamily,
                             fontWeight = FontWeight.Bold,
                             fontSize = 21.sp
                         ),
@@ -3871,7 +4196,7 @@ private fun CollectionsMyFavoritesSummaryRow(
                 Text(
                     text = "My Favorites",
                     style = TextStyle(
-                        fontFamily = M2AndroidYSMusicFontFamily,
+                        fontFamily = SonoraAndroidYSMusicFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 20.sp
                     ),
@@ -3881,7 +4206,7 @@ private fun CollectionsMyFavoritesSummaryRow(
                 Text(
                     text = "›",
                     style = TextStyle(
-                        fontFamily = M2AndroidYSMusicFontFamily,
+                        fontFamily = SonoraAndroidYSMusicFontFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 20.sp
                     ),
@@ -4074,7 +4399,7 @@ private fun CollectionsNewPlaylistCard(
         Text(
             text = "New playlist",
             style = TextStyle(
-                fontFamily = M2AndroidSFProSemiboldFamily,
+                fontFamily = SonoraAndroidSFProSemiboldFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp
             ),
@@ -4177,7 +4502,7 @@ private fun PlaylistDetailHeader(
                 iconSize = 29.dp,
                 iconWidth = 24.5.dp,
                 iconHeight = 29.dp,
-                tint = if (isSleepTimerActive) ru.hippo.M2.ui.theme.M2AccentYellow else primaryColor
+                tint = if (isSleepTimerActive) ru.hippo.Sonora.ui.theme.SonoraAccentYellow else primaryColor
             )
 
             Surface(
@@ -4272,6 +4597,8 @@ private fun PlaylistDetailPage(
     isPlaying: Boolean,
     isCurrentQueueMatching: Boolean,
     isSleepTimerActive: Boolean,
+    selectionMode: Boolean,
+    selectedTrackIDs: Set<String>,
     onTrackTap: (TrackItem) -> Unit,
     onHeaderPlayPauseTap: () -> Unit,
     onHeaderShuffleTap: () -> Unit,
@@ -4341,34 +4668,40 @@ private fun PlaylistDetailPage(
                 track = track,
                 isCurrent = currentTrackID == track.id,
                 showsPlaybackIndicator = (currentTrackID == track.id && isPlaying),
+                selectionMode = selectionMode,
+                isSelected = selectedTrackIDs.contains(track.id),
                 onClick = { onTrackTap(track) },
                 onLongPress = { onTrackLongPress(track) },
                 activeColor = playlistAccent,
                 startActions = emptyList(),
-                endActions = buildList {
-                    if (canRemoveTracks) {
+                endActions = if (selectionMode) {
+                    emptyList()
+                } else {
+                    buildList {
+                        if (canRemoveTracks) {
+                            add(
+                                SwipeTrackAction(
+                                    label = "Remove",
+                                    backgroundColor = Color(0xFFFF3B30),
+                                    iconRes = R.drawable.ic_global_trash_fill,
+                                    onAction = { onTrackSwipeRemove(track) }
+                                )
+                            )
+                        }
                         add(
                             SwipeTrackAction(
-                                label = "Remove",
-                                backgroundColor = Color(0xFFFF3B30),
-                                iconRes = R.drawable.ic_global_trash_fill,
-                                onAction = { onTrackSwipeRemove(track) }
+                                label = if (track.isFavorite) "Unfav" else "Fav",
+                                backgroundColor = if (track.isFavorite) {
+                                    Color(0xFF6A6A6A)
+                                } else {
+                                    Color(0xFFFF5966)
+                                },
+                                iconRes = if (track.isFavorite) R.drawable.heart_slash_fill else R.drawable.heart_fill,
+                                onAction = { onTrackSwipeFavorite(track) },
+                                fullSwipeEnabled = true
                             )
                         )
                     }
-                    add(
-                        SwipeTrackAction(
-                            label = if (track.isFavorite) "Unfav" else "Fav",
-                            backgroundColor = if (track.isFavorite) {
-                                Color(0xFF6A6A6A)
-                            } else {
-                                Color(0xFFFF5966)
-                            },
-                            iconRes = if (track.isFavorite) R.drawable.heart_slash_fill else R.drawable.heart_fill,
-                            onAction = { onTrackSwipeFavorite(track) },
-                            fullSwipeEnabled = true
-                        )
-                    )
                 }
             )
             if (index < tracks.lastIndex) {
@@ -4389,6 +4722,8 @@ private fun FavoritesPage(
     bottomInset: androidx.compose.ui.unit.Dp,
     currentTrackID: String?,
     isPlaying: Boolean,
+    selectionMode: Boolean,
+    selectedTrackIDs: Set<String>,
     onTrackTap: (TrackItem) -> Unit,
     onTrackLongPress: (TrackItem) -> Unit,
     onTrackSwipeUnfavorite: (TrackItem) -> Unit,
@@ -4414,23 +4749,29 @@ private fun FavoritesPage(
                 track = track,
                 isCurrent = currentTrackID == track.id,
                 showsPlaybackIndicator = (currentTrackID == track.id && isPlaying),
+                selectionMode = selectionMode,
+                isSelected = selectedTrackIDs.contains(track.id),
                 onClick = { onTrackTap(track) },
                 onLongPress = { onTrackLongPress(track) },
                 startActions = emptyList(),
-                endActions = listOf(
-                    SwipeTrackAction(
-                        label = "Unfollow",
-                        backgroundColor = Color(0xFF6E6E6E),
-                        iconRes = R.drawable.heart_slash_fill,
-                        onAction = { onTrackSwipeUnfavorite(track) }
-                    ),
-                    SwipeTrackAction(
-                        label = "Add",
-                        backgroundColor = Color(0xFF2979F2),
-                        iconRes = R.drawable.ic_global_text_badge_plus,
-                        onAction = { onTrackSwipeAddToPlaylist(track) }
+                endActions = if (selectionMode) {
+                    emptyList()
+                } else {
+                    listOf(
+                        SwipeTrackAction(
+                            label = "Unfollow",
+                            backgroundColor = Color(0xFF6E6E6E),
+                            iconRes = R.drawable.heart_slash_fill,
+                            onAction = { onTrackSwipeUnfavorite(track) }
+                        ),
+                        SwipeTrackAction(
+                            label = "Add",
+                            backgroundColor = Color(0xFF2979F2),
+                            iconRes = R.drawable.ic_global_text_badge_plus,
+                            onAction = { onTrackSwipeAddToPlaylist(track) }
+                        )
                     )
-                )
+                }
             )
             if (index < filteredTracks.lastIndex) {
                 HorizontalDivider(
@@ -4484,6 +4825,8 @@ private fun TrackRow(
     track: TrackItem,
     isCurrent: Boolean,
     showsPlaybackIndicator: Boolean,
+    selectionMode: Boolean = false,
+    isSelected: Boolean = false,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
     activeColor: Color = MaterialTheme.colorScheme.primary,
@@ -4496,6 +4839,11 @@ private fun TrackRow(
     val maxStartOffset = if (startActions.isEmpty()) 0f else actionWidthPx * startActions.size
     val maxEndOffset = if (endActions.isEmpty()) 0f else actionWidthPx * endActions.size
     val fullSwipeTrigger = with(density) { 108.dp.toPx() }
+    val rowBackground = if (isSelected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+    } else {
+        MaterialTheme.colorScheme.background
+    }
 
     var dragOffsetPx by remember(track.id, startActions, endActions) { mutableFloatStateOf(0f) }
     val animatedOffsetPx by animateFloatAsState(
@@ -4564,7 +4912,7 @@ private fun TrackRow(
                 }
                 .draggable(
                     orientation = Orientation.Horizontal,
-                    enabled = startActions.isNotEmpty() || endActions.isNotEmpty(),
+                    enabled = !selectionMode && (startActions.isNotEmpty() || endActions.isNotEmpty()),
                     state = rememberDraggableState { delta ->
                         val nextOffset = dragOffsetPx + delta
                         dragOffsetPx = nextOffset.coerceIn(-maxEndOffset, maxStartOffset)
@@ -4599,21 +4947,21 @@ private fun TrackRow(
                 )
                 .combinedClickable(
                     onClick = {
-                        if (dragOffsetPx != 0f) {
+                        if (!selectionMode && dragOffsetPx != 0f) {
                             dragOffsetPx = 0f
                         } else {
                             onClick()
                         }
                     },
                     onLongClick = {
-                        if (dragOffsetPx != 0f) {
+                        if (!selectionMode && dragOffsetPx != 0f) {
                             dragOffsetPx = 0f
                         } else {
                             onLongPress()
                         }
                     }
                 )
-                .background(MaterialTheme.colorScheme.background)
+                .background(rowBackground)
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -4621,7 +4969,14 @@ private fun TrackRow(
                 modifier = Modifier.size(34.dp),
                 contentAlignment = Alignment.Center
             ) {
-                if (showsPlaybackIndicator) {
+                if (selectionMode && isSelected) {
+                    Icon(
+                        imageVector = Icons.Filled.Check,
+                        contentDescription = "Selected",
+                        tint = ru.hippo.Sonora.ui.theme.SonoraAccentYellow,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else if (showsPlaybackIndicator && !selectionMode) {
                     Image(
                         painter = painterResource(R.drawable.ic_global_pause),
                         contentDescription = "Playing",
@@ -4644,7 +4999,11 @@ private fun TrackRow(
 
             Text(
                 text = track.displayTitle(),
-                color = if (isCurrent) activeColor else MaterialTheme.colorScheme.onSurface,
+                color = when {
+                    isSelected -> MaterialTheme.colorScheme.onSurface
+                    isCurrent -> activeColor
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold
@@ -4660,7 +5019,7 @@ private fun TrackRow(
                 text = formatDuration(track.durationMs),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = TextStyle(
-                    fontFamily = M2AndroidSFProSemiboldFamily,
+                    fontFamily = SonoraAndroidSFProSemiboldFamily,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
@@ -4949,6 +5308,79 @@ private fun EmptyListLabel(text: String) {
 }
 
 @Composable
+private fun FirstMusicOnboardingPage(
+    onAddMusicTap: () -> Unit
+) {
+    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val buttonBackground = if (isDark) {
+        Color.White.copy(alpha = 0.10f)
+    } else {
+        Color.Black.copy(alpha = 0.06f)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Add first music",
+                style = TextStyle(
+                    fontFamily = SonoraAndroidYSMusicFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 34.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                text = "Add audio files from your device to start listening.",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(buttonBackground)
+                    .clickable(onClick = onAddMusicTap)
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_global_plus),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Add first music",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PlainControlButton(
     iconRes: Int,
     contentDescription: String,
@@ -4992,8 +5424,8 @@ private fun MiniPlayer(
     onNext: () -> Unit
 ) {
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    val background = if (isDark) M2MiniPlayerDark else M2MiniPlayerLight
-    val border = if (isDark) M2MiniPlayerBorderDark else M2MiniPlayerBorderLight
+    val background = if (isDark) SonoraMiniPlayerDark else SonoraMiniPlayerLight
+    val border = if (isDark) SonoraMiniPlayerBorderDark else SonoraMiniPlayerBorderLight
     val canStepQueue = hasQueue && canStep
     val artworkBitmap = rememberTrackArtwork(track, maxSize = 192)
     var dragX by remember { mutableFloatStateOf(0f) }
@@ -5228,6 +5660,13 @@ private fun PlayerView(
             val sliderBaseColor = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
             val sliderActiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 1f else 0.45f)
             val sliderInactiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 0.26f else 0.12f)
+            val controlLift = if (maxHeight > 760.dp) {
+                val candidate = (maxHeight - 760.dp) * 0.24f
+                minOf(candidate, 56.dp)
+            } else {
+                0.dp
+            }
+            val controlsBottomPadding = 6.dp + controlLift
             val sliderColors = SliderDefaults.colors(
                 thumbColor = sliderActiveColor,
                 activeTrackColor = sliderActiveColor,
@@ -5309,7 +5748,7 @@ private fun PlayerView(
                     Text(
                         text = formatDuration(elapsedMs),
                         style = TextStyle(
-                            fontFamily = M2AndroidSFProSemiboldFamily,
+                            fontFamily = SonoraAndroidSFProSemiboldFamily,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             letterSpacing = (-0.1).sp
@@ -5319,7 +5758,7 @@ private fun PlayerView(
                     Text(
                         text = formatDuration(durationMs),
                         style = TextStyle(
-                            fontFamily = M2AndroidSFProSemiboldFamily,
+                            fontFamily = SonoraAndroidSFProSemiboldFamily,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             letterSpacing = (-0.1).sp
@@ -5385,7 +5824,7 @@ private fun PlayerView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(88.dp)
-                        .padding(start = 14.dp, end = 14.dp, bottom = 6.dp)
+                        .padding(start = 14.dp, end = 14.dp, bottom = controlsBottomPadding)
                 ) {
                     Column(
                         modifier = Modifier.align(Alignment.CenterStart),
@@ -5400,7 +5839,7 @@ private fun PlayerView(
                         val repeatTint = if (repeatMode == RepeatMode.None) {
                             primaryColor.copy(alpha = 0.92f)
                         } else {
-                            ru.hippo.M2.ui.theme.M2AccentYellow
+                            ru.hippo.Sonora.ui.theme.SonoraAccentYellow
                         }
                         PlainControlButton(
                             iconRes = repeatIcon,
@@ -5419,7 +5858,7 @@ private fun PlayerView(
                             size = 42.dp,
                             iconSize = 24.dp,
                             tint = if (isShuffleEnabled) {
-                                ru.hippo.M2.ui.theme.M2AccentYellow
+                                ru.hippo.Sonora.ui.theme.SonoraAccentYellow
                             } else {
                                 primaryColor.copy(alpha = 0.92f)
                             }
@@ -5475,7 +5914,7 @@ private fun PlayerView(
                             iconWidth = 24.5.dp,
                             iconHeight = 29.dp,
                             tint = if (isSleepTimerActive) {
-                                ru.hippo.M2.ui.theme.M2AccentYellow
+                                ru.hippo.Sonora.ui.theme.SonoraAccentYellow
                             } else {
                                 primaryColor.copy(alpha = 0.92f)
                             }
@@ -5501,7 +5940,7 @@ private fun PlayerView(
                         text = "Sleep: ${formatDuration(sleepTimerRemainingMs)}",
                         modifier = Modifier
                             .align(Alignment.CenterHorizontally)
-                            .padding(bottom = 6.dp),
+                            .padding(bottom = controlsBottomPadding),
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium
@@ -5509,7 +5948,7 @@ private fun PlayerView(
                         color = secondaryColor
                     )
                 } else {
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(controlsBottomPadding))
                 }
             }
         }
@@ -6335,8 +6774,8 @@ private fun formatDuration(durationMs: Long): String {
 
 @Preview(showBackground = true)
 @Composable
-private fun M2AppPreview() {
-    M2Theme(dynamicColor = false) {
-        M2App()
+private fun SonoraAppPreview() {
+    SonoraTheme(dynamicColor = false) {
+        SonoraApp()
     }
 }

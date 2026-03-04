@@ -1,4 +1,4 @@
-package ru.hippo.M2.ui.theme
+package ru.hippo.Sonora.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -8,29 +8,29 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 
 private val DarkColorScheme = darkColorScheme(
-    primary = M2AccentYellow,
-    onPrimary = M2DarkBackground,
-    background = M2DarkBackground,
-    onBackground = M2DarkOnSurface,
-    surface = M2DarkSurface,
-    onSurface = M2DarkOnSurface,
-    surfaceVariant = M2DarkSurfaceVariant,
-    onSurfaceVariant = M2DarkSecondaryText
+    primary = SonoraAccentYellow,
+    onPrimary = SonoraDarkBackground,
+    background = SonoraDarkBackground,
+    onBackground = SonoraDarkOnSurface,
+    surface = SonoraDarkSurface,
+    onSurface = SonoraDarkOnSurface,
+    surfaceVariant = SonoraDarkSurfaceVariant,
+    onSurfaceVariant = SonoraDarkSecondaryText
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = M2AccentYellow,
-    onPrimary = M2LightOnSurface,
-    background = M2LightBackground,
-    onBackground = M2LightOnSurface,
-    surface = M2LightSurface,
-    onSurface = M2LightOnSurface,
-    surfaceVariant = M2LightSurfaceVariant,
-    onSurfaceVariant = M2LightSecondaryText
+    primary = SonoraAccentYellow,
+    onPrimary = SonoraLightOnSurface,
+    background = SonoraLightBackground,
+    onBackground = SonoraLightOnSurface,
+    surface = SonoraLightSurface,
+    onSurface = SonoraLightOnSurface,
+    surfaceVariant = SonoraLightSurfaceVariant,
+    onSurfaceVariant = SonoraLightSecondaryText
 )
 
 @Composable
-fun M2Theme(
+fun SonoraTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit

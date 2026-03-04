@@ -1,4 +1,4 @@
-package ru.hippo.M2.music
+package ru.hippo.Sonora.music
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -14,6 +14,7 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -30,8 +31,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import ru.hippo.M2.MainActivity
-import ru.hippo.M2.R
+import ru.hippo.Sonora.MainActivity
+import ru.hippo.Sonora.R
 
 enum class RepeatMode {
     None,
@@ -74,7 +75,7 @@ class PlaybackController(
 
     private val appContext = context.applicationContext
     private val notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    private val mediaSession = MediaSession(appContext, "M2Playback")
+    private val mediaSession = MediaSession(appContext, "SonoraPlayback")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val random = Random(SystemClock.elapsedRealtime())
     private val artworkCache = mutableMapOf<String, Bitmap?>()
@@ -432,6 +433,7 @@ class PlaybackController(
                         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                 )
+                setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK)
                 setDataSource(track.filePath)
                 setOnCompletionListener {
                     if (!playNextInternal(automatic = true)) {
@@ -491,6 +493,16 @@ class PlaybackController(
     private fun updateExternalState() {
         updateMediaSession()
         updateNotification()
+        PlaybackForegroundService.sync(appContext)
+    }
+
+    internal fun shouldRunInForegroundService(): Boolean {
+        return currentTrack != null
+    }
+
+    internal fun notificationForForegroundService(): Notification? {
+        val track = currentTrack ?: return null
+        return buildPlaybackNotification(track)
     }
 
     private fun updateMediaSession() {
@@ -548,6 +560,15 @@ class PlaybackController(
             return
         }
 
+        val notification = buildPlaybackNotification(track)
+        try {
+            notificationManager.notify(NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // Notification permission can be denied by user on Android 13+.
+        }
+    }
+
+    private fun buildPlaybackNotification(track: TrackItem): Notification {
         val contentIntent = PendingIntent.getActivity(
             appContext,
             7002,
@@ -573,7 +594,7 @@ class PlaybackController(
             actionPendingIntent(ACTION_NEXT)
         ).build()
 
-        val notification = Notification.Builder(appContext, NOTIFICATION_CHANNEL_ID)
+        return Notification.Builder(appContext, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.tab_note)
             .setContentTitle(displayTitle(track))
             .setContentText(track.artist.ifBlank { "Unknown Artist" })
@@ -593,12 +614,6 @@ class PlaybackController(
                     .setShowActionsInCompactView(0, 1, 2)
             )
             .build()
-
-        try {
-            notificationManager.notify(NOTIFICATION_ID, notification)
-        } catch (_: SecurityException) {
-            // Notification permission can be denied by user on Android 13+.
-        }
     }
 
     private fun actionPendingIntent(action: String): PendingIntent {
@@ -665,12 +680,12 @@ class PlaybackController(
     }
 
     companion object {
-        const val ACTION_PLAY_PAUSE = "ru.hippo.M2.action.PLAY_PAUSE"
-        const val ACTION_NEXT = "ru.hippo.M2.action.NEXT"
-        const val ACTION_PREVIOUS = "ru.hippo.M2.action.PREVIOUS"
-        const val ACTION_STOP = "ru.hippo.M2.action.STOP"
+        const val ACTION_PLAY_PAUSE = "ru.hippo.Sonora.action.PLAY_PAUSE"
+        const val ACTION_NEXT = "ru.hippo.Sonora.action.NEXT"
+        const val ACTION_PREVIOUS = "ru.hippo.Sonora.action.PREVIOUS"
+        const val ACTION_STOP = "ru.hippo.Sonora.action.STOP"
 
-        private const val NOTIFICATION_CHANNEL_ID = "m2_playback"
-        private const val NOTIFICATION_ID = 2047
+        private const val NOTIFICATION_CHANNEL_ID = "sonora_playback"
+        internal const val NOTIFICATION_ID = 2047
     }
 }

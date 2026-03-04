@@ -1,4 +1,4 @@
-package ru.hippo.M2.music
+package ru.hippo.Sonora.music
 
 data class TrackItem(
     val id: String,

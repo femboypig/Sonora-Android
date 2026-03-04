@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "ru.hippo.M2"
+    namespace = "ru.hippo.Sonora"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -12,7 +12,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "ru.hippo.M2"
+        applicationId = "ru.hippo.Sonora"
         minSdk = 29
         targetSdk = 36
         versionCode = 1

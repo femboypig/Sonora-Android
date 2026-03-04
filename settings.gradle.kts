@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "M2"
+rootProject.name = "Sonora"
 include(":app")
  

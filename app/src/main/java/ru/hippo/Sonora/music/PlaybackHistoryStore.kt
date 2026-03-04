@@ -1,4 +1,4 @@
-package ru.hippo.M2.music
+package ru.hippo.Sonora.music
 
 import android.content.Context
 import java.io.File
@@ -6,7 +6,7 @@ import org.json.JSONArray
 
 class PlaybackHistoryStore(private val context: Context) {
 
-    private val historyFile = File(context.filesDir, "m2_playback_history_v1.json")
+    private val historyFile = File(context.filesDir, "sonora_playback_history_v1.json")
     private val maxEntries = 160
 
     fun recordTrack(trackId: String) {

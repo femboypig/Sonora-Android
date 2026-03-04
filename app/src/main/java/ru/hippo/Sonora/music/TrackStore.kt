@@ -1,4 +1,4 @@
-package ru.hippo.M2.music
+package ru.hippo.Sonora.music
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
@@ -18,8 +18,8 @@ class TrackStore(private val context: Context) {
         val artworkPath: String?
     )
 
-    private val tracksFile = File(context.filesDir, "m2_tracks_v1.json")
-    private val musicDir = File(context.filesDir, "M2").apply { mkdirs() }
+    private val tracksFile = File(context.filesDir, "sonora_tracks_v1.json")
+    private val musicDir = File(context.filesDir, "Sonora").apply { mkdirs() }
     private val artworkDir = File(musicDir, "artwork").apply { mkdirs() }
 
     fun loadTracks(): List<TrackItem> {
