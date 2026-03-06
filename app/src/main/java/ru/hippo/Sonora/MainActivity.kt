@@ -1,12 +1,15 @@
 package ru.hippo.Sonora
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -30,6 +33,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -49,13 +53,18 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -69,12 +78,15 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SliderState
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.animateColorAsState
@@ -94,6 +106,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -126,10 +139,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import java.io.File
+import org.json.JSONArray
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -199,6 +215,212 @@ private enum class TrackSelectionContext {
     PlaylistDetail
 }
 
+private enum class PlayerSliderStyle(val storageValue: String, val label: String) {
+    Line("line", "Line"),
+    Wave("wave", "Wave");
+
+    companion object {
+        fun fromStorage(value: String?): PlayerSliderStyle {
+            return values().firstOrNull { it.storageValue == value } ?: Wave
+        }
+    }
+}
+
+private enum class ArtworkStyle(
+    val storageValue: String,
+    val label: String
+) {
+    Square("square", "Square"),
+    Rounded("rounded", "Rounded");
+
+    companion object {
+        fun fromStorage(value: String?): ArtworkStyle {
+            return values().firstOrNull { it.storageValue == value } ?: Rounded
+        }
+    }
+}
+
+private enum class AppFontStyle(val storageValue: String, val label: String) {
+    System("system", "System"),
+    Serif("serif", "Noto Serif");
+
+    companion object {
+        fun fromStorage(value: String?): AppFontStyle {
+            return values().firstOrNull { it.storageValue == value } ?: System
+        }
+    }
+}
+
+private data class SonoraAppSettings(
+    val sliderStyle: PlayerSliderStyle = PlayerSliderStyle.Wave,
+    val artworkStyle: ArtworkStyle = ArtworkStyle.Square,
+    val fontStyle: AppFontStyle = AppFontStyle.System,
+    val accentHex: String = DEFAULT_ACCENT_HEX,
+    val preservePlayerModes: Boolean = true,
+    val trackGapSeconds: Float = 0f,
+    val maxStorageMb: Int = -1
+)
+
+private data class PlaybackSessionSnapshot(
+    val queueTrackIds: List<String>,
+    val currentTrackId: String,
+    val positionMs: Long,
+    val isPlaying: Boolean,
+    val shuffleEnabled: Boolean,
+    val repeatMode: RepeatMode
+)
+
+private class SonoraSettingsStore(context: Context) {
+    private val prefs = context.getSharedPreferences("sonora_settings_v1", Context.MODE_PRIVATE)
+
+    fun load(): SonoraAppSettings {
+        val storedAccentHex = normalizeHexColor(prefs.getString(KEY_ACCENT_HEX, null))
+        val accentHex = storedAccentHex ?: run {
+            if (prefs.contains(KEY_ACCENT_HUE)) {
+                formatColorHex(resolveLegacyAccentColorFromHue(prefs.getFloat(KEY_ACCENT_HUE, 48f)))
+            } else {
+                val legacyAccentHue = legacyAccentHueFromToken(prefs.getString(KEY_ACCENT_COLOR_LEGACY, null))
+                if (legacyAccentHue != null) {
+                    formatColorHex(resolveLegacyAccentColorFromHue(legacyAccentHue))
+                } else {
+                    DEFAULT_ACCENT_HEX
+                }
+            }
+        }
+        return SonoraAppSettings(
+            sliderStyle = PlayerSliderStyle.fromStorage(prefs.getString(KEY_SLIDER_STYLE, PlayerSliderStyle.Wave.storageValue)),
+            artworkStyle = ArtworkStyle.fromStorage(prefs.getString(KEY_ARTWORK_STYLE, ArtworkStyle.Square.storageValue)),
+            fontStyle = AppFontStyle.fromStorage(prefs.getString(KEY_FONT_STYLE, AppFontStyle.System.storageValue)),
+            accentHex = accentHex,
+            preservePlayerModes = prefs.getBoolean(KEY_PRESERVE_PLAYER_MODES, true),
+            trackGapSeconds = nearestTrackGapSecondsOption(prefs.getFloat(KEY_TRACK_GAP, 0f)),
+            maxStorageMb = nearestMaxStorageOptionMb(prefs.getInt(KEY_MAX_STORAGE_MB, -1))
+        )
+    }
+
+    fun save(settings: SonoraAppSettings) {
+        prefs.edit()
+            .putString(KEY_SLIDER_STYLE, settings.sliderStyle.storageValue)
+            .putString(KEY_ARTWORK_STYLE, settings.artworkStyle.storageValue)
+            .putString(KEY_FONT_STYLE, settings.fontStyle.storageValue)
+            .putString(KEY_ACCENT_HEX, normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX)
+            .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
+            .putFloat(KEY_TRACK_GAP, nearestTrackGapSecondsOption(settings.trackGapSeconds))
+            .putInt(KEY_MAX_STORAGE_MB, nearestMaxStorageOptionMb(settings.maxStorageMb))
+            .apply()
+    }
+
+    fun loadPlaybackSessionSnapshot(): PlaybackSessionSnapshot? {
+        val queueJson = prefs.getString(KEY_SESSION_QUEUE_JSON, null) ?: return null
+        val queueTrackIds = runCatching {
+            val jsonArray = JSONArray(queueJson)
+            buildList(jsonArray.length()) {
+                for (index in 0 until jsonArray.length()) {
+                    val value = jsonArray.optString(index, "")
+                    if (value.isNotBlank()) {
+                        add(value)
+                    }
+                }
+            }
+        }.getOrDefault(emptyList())
+        if (queueTrackIds.isEmpty()) {
+            return null
+        }
+
+        val currentTrackId = prefs.getString(KEY_SESSION_TRACK_ID, null)?.takeIf { it.isNotBlank() } ?: return null
+        val positionMs = prefs.getLong(KEY_SESSION_POSITION_MS, 0L).coerceAtLeast(0L)
+        val isPlaying = prefs.getBoolean(KEY_SESSION_IS_PLAYING, false)
+        val shuffleEnabled = prefs.getBoolean(KEY_SESSION_SHUFFLE, false)
+        val repeatMode = runCatching {
+            RepeatMode.valueOf(prefs.getString(KEY_SESSION_REPEAT_MODE, RepeatMode.None.name) ?: RepeatMode.None.name)
+        }.getOrDefault(RepeatMode.None)
+
+        return PlaybackSessionSnapshot(
+            queueTrackIds = queueTrackIds,
+            currentTrackId = currentTrackId,
+            positionMs = positionMs,
+            isPlaying = isPlaying,
+            shuffleEnabled = shuffleEnabled,
+            repeatMode = repeatMode
+        )
+    }
+
+    fun savePlaybackSessionSnapshot(snapshot: PlaybackSessionSnapshot) {
+        val queueJson = JSONArray(snapshot.queueTrackIds).toString()
+        prefs.edit()
+            .putString(KEY_SESSION_QUEUE_JSON, queueJson)
+            .putString(KEY_SESSION_TRACK_ID, snapshot.currentTrackId)
+            .putLong(KEY_SESSION_POSITION_MS, snapshot.positionMs.coerceAtLeast(0L))
+            .putBoolean(KEY_SESSION_IS_PLAYING, snapshot.isPlaying)
+            .putBoolean(KEY_SESSION_SHUFFLE, snapshot.shuffleEnabled)
+            .putString(KEY_SESSION_REPEAT_MODE, snapshot.repeatMode.name)
+            .apply()
+    }
+
+    fun clearPlaybackSessionSnapshot() {
+        prefs.edit()
+            .remove(KEY_SESSION_QUEUE_JSON)
+            .remove(KEY_SESSION_TRACK_ID)
+            .remove(KEY_SESSION_POSITION_MS)
+            .remove(KEY_SESSION_IS_PLAYING)
+            .remove(KEY_SESSION_SHUFFLE)
+            .remove(KEY_SESSION_REPEAT_MODE)
+            .apply()
+    }
+
+    private companion object {
+        const val KEY_SLIDER_STYLE = "player_slider_style"
+        const val KEY_ARTWORK_STYLE = "artwork_style"
+        const val KEY_FONT_STYLE = "font_style"
+        const val KEY_ACCENT_HEX = "accent_hex"
+        const val KEY_ACCENT_HUE = "accent_hue"
+        const val KEY_ACCENT_COLOR_LEGACY = "accent_color"
+        const val KEY_PRESERVE_PLAYER_MODES = "preserve_player_modes"
+        const val KEY_TRACK_GAP = "track_gap_seconds"
+        const val KEY_MAX_STORAGE_MB = "max_storage_mb"
+        const val KEY_SESSION_QUEUE_JSON = "playback_session_queue_json"
+        const val KEY_SESSION_TRACK_ID = "playback_session_track_id"
+        const val KEY_SESSION_POSITION_MS = "playback_session_position_ms"
+        const val KEY_SESSION_IS_PLAYING = "playback_session_is_playing"
+        const val KEY_SESSION_SHUFFLE = "playback_session_shuffle"
+        const val KEY_SESSION_REPEAT_MODE = "playback_session_repeat_mode"
+    }
+}
+
+private const val DEFAULT_ACCENT_HEX = "#E6BE00"
+private val TrackGapSecondsOptions = listOf(0f, 0.5f, 1f, 1.5f, 2f, 3f, 5f, 8f)
+private val MaxStorageMbOptions = listOf(-1, 512, 1024, 2048, 3072, 4096, 6144, 8192)
+
+private fun nearestTrackGapSecondsOption(value: Float): Float {
+    val clamped = value.coerceIn(0f, 8f)
+    return TrackGapSecondsOptions.minByOrNull { abs(it - clamped) } ?: 0f
+}
+
+private fun nearestMaxStorageOptionMb(value: Int): Int {
+    if (value <= 0) {
+        return -1
+    }
+    val clamped = value.coerceIn(256, 8192)
+    return MaxStorageMbOptions.minByOrNull { abs(it - clamped) } ?: 2048
+}
+
+private fun nearestAccentHue(value: Float): Float {
+    if (!value.isFinite()) {
+        return 48f
+    }
+    return value.coerceIn(0f, 360f)
+}
+
+private fun legacyAccentHueFromToken(token: String?): Float? {
+    return when (token?.lowercase()) {
+        "yellow" -> 48f
+        "sky" -> 208f
+        "mint" -> 154f
+        "coral" -> 12f
+        else -> null
+    }
+}
+
 private data class SonoraTabSpec(
     val tab: SonoraTab,
     val title: String,
@@ -245,9 +467,19 @@ private val SonoraAndroidSFProSemiboldFamily = FontFamily(
     Font(R.font.sf_pro_text_bold, FontWeight.Bold)
 )
 
+private val SonoraAndroidNotoSerifFamily = FontFamily(
+    Font(R.font.noto_serif_regular, FontWeight.Normal),
+    Font(R.font.noto_serif_medium, FontWeight.Medium),
+    Font(R.font.noto_serif_bold, FontWeight.Bold)
+)
+
 private val SonoraAndroidHomeHeadingFontFamily = FontFamily(
     Font(R.font.tt_commons_pro_expanded_extrabold, FontWeight.ExtraBold)
 )
+
+private val LocalAccentColor = staticCompositionLocalOf {
+    ru.hippo.Sonora.ui.theme.SonoraAccentYellow
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -257,11 +489,18 @@ private fun SonoraApp() {
     val playlistStore = remember(context) { PlaylistStore(context) }
     val analyticsStore = remember(context) { TrackAnalyticsStore(context) }
     val playbackHistoryStore = remember(context) { PlaybackHistoryStore(context) }
+    val settingsStore = remember(context) { SonoraSettingsStore(context) }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val appVersionLabel = remember(context) { resolveAppVersionLabel(context) }
+    val githubProjectURL = remember { "https://github.com/femboypig/Sonora-Android" }
+    val githubProjectLabel = remember { "femboypig/Sonora-Android" }
+    val storageRootPath = remember(context) { formatStoragePathForAbout(context.filesDir.absolutePath) }
 
     var tracks by remember { mutableStateOf(trackStore.loadTracks()) }
     var userPlaylists by remember { mutableStateOf(playlistStore.loadPlaylists()) }
+    var appSettings by remember { mutableStateOf(settingsStore.load()) }
+    var storageUsageBytes by remember { mutableLongStateOf(0L) }
 
     var selectedTab by rememberSaveable { mutableStateOf(SonoraTab.Home) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
@@ -298,6 +537,7 @@ private fun SonoraApp() {
 
     var analyticsVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
+    var playbackSessionRestored by rememberSaveable { mutableStateOf(false) }
 
     val playbackController = remember(analyticsStore, playbackHistoryStore, context) {
         PlaybackController(
@@ -329,6 +569,99 @@ private fun SonoraApp() {
     val compactPlaylistTitleThreshold = remember(density) { with(density) { 175.dp.toPx().toInt() } }
     var pullRevealDistance by remember { mutableFloatStateOf(0f) }
     var pullHideDistance by remember { mutableFloatStateOf(0f) }
+
+    val persistPlaybackSession: () -> Unit = {
+        val currentTrackId = playbackController.currentTrackId
+        val queueTrackIds = playbackController.currentQueueTrackIds()
+        if (currentTrackId.isNullOrBlank() || queueTrackIds.isEmpty()) {
+            settingsStore.clearPlaybackSessionSnapshot()
+        } else {
+            val preserveModes = appSettings.preservePlayerModes
+            settingsStore.savePlaybackSessionSnapshot(
+                PlaybackSessionSnapshot(
+                    queueTrackIds = queueTrackIds,
+                    currentTrackId = currentTrackId,
+                    positionMs = playbackController.currentPositionMs(),
+                    isPlaying = playbackController.isPlaying,
+                    shuffleEnabled = if (preserveModes) playbackController.isShuffleEnabled else false,
+                    repeatMode = if (preserveModes) playbackController.repeatMode else RepeatMode.None
+                )
+            )
+        }
+    }
+
+    LaunchedEffect(tracks) {
+        storageUsageBytes = withContext(Dispatchers.IO) {
+            computeAppStorageUsageBytes(context)
+        }
+    }
+
+    LaunchedEffect(playbackController, appSettings.trackGapSeconds) {
+        playbackController.applyAudioSettings(trackGapSeconds = appSettings.trackGapSeconds)
+    }
+
+    LaunchedEffect(playbackController, tracks, appSettings.preservePlayerModes) {
+        if (playbackSessionRestored || tracks.isEmpty()) {
+            return@LaunchedEffect
+        }
+        val snapshot = settingsStore.loadPlaybackSessionSnapshot()
+        if (snapshot == null) {
+            playbackSessionRestored = true
+            return@LaunchedEffect
+        }
+
+        val trackById = tracks.associateBy { it.id }
+        val resolvedQueue = snapshot.queueTrackIds.mapNotNull { trackById[it] }
+        if (resolvedQueue.isEmpty()) {
+            settingsStore.clearPlaybackSessionSnapshot()
+            playbackSessionRestored = true
+            return@LaunchedEffect
+        }
+        val resolvedTargetId = if (resolvedQueue.any { it.id == snapshot.currentTrackId }) {
+            snapshot.currentTrackId
+        } else {
+            resolvedQueue.first().id
+        }
+        playbackController.restoreSession(
+            queue = resolvedQueue,
+            targetTrackId = resolvedTargetId,
+            positionMs = snapshot.positionMs,
+            shouldPlay = false,
+            shuffleEnabled = if (appSettings.preservePlayerModes) snapshot.shuffleEnabled else false,
+            repeatMode = if (appSettings.preservePlayerModes) snapshot.repeatMode else RepeatMode.None
+        )
+        playbackSessionRestored = true
+    }
+
+    LaunchedEffect(
+        playbackSessionRestored,
+        playbackController.currentTrackId,
+        playbackController.queueCount,
+        playbackController.isPlaying,
+        playbackController.isShuffleEnabled,
+        playbackController.repeatMode,
+        appSettings.preservePlayerModes
+    ) {
+        if (!playbackSessionRestored) {
+            return@LaunchedEffect
+        }
+        persistPlaybackSession()
+    }
+
+    LaunchedEffect(
+        playbackSessionRestored,
+        playbackController.currentTrackId,
+        playbackController.isPlaying,
+        appSettings.preservePlayerModes
+    ) {
+        if (!playbackSessionRestored || !playbackController.isPlaying || playbackController.currentTrackId == null) {
+            return@LaunchedEffect
+        }
+        while (playbackController.isPlaying && playbackController.currentTrackId != null) {
+            delay(1500L)
+            persistPlaybackSession()
+        }
+    }
 
     LaunchedEffect(selectedTab) {
         showSearch = false
@@ -837,17 +1170,89 @@ private fun SonoraApp() {
                     }
                 }
 
+                val hasStorageLimit = appSettings.maxStorageMb > 0
+                val maxStorageBytes = if (hasStorageLimit) {
+                    appSettings.maxStorageMb.toLong() * 1_048_576L
+                } else {
+                    Long.MAX_VALUE
+                }
+                var currentUsageBytes = withContext(Dispatchers.IO) {
+                    computeAppStorageUsageBytes(context)
+                }
+
+                if (hasStorageLimit && currentUsageBytes >= maxStorageBytes) {
+                    snackbarHostState.showSnackbar(
+                        "Storage limit reached (${formatStorageSize(maxStorageBytes)}). Increase max space in Settings."
+                    )
+                    return@launch
+                }
+
+                val allowedUris = mutableListOf<Uri>()
+                var skippedUnknownSize = 0
+                var skippedOverLimit = 0
+                var remainingBytes = if (hasStorageLimit) {
+                    maxStorageBytes - currentUsageBytes
+                } else {
+                    Long.MAX_VALUE
+                }
+
+                uris.forEach { uri ->
+                    val uriSize = queryUriSizeBytes(context, uri)
+                    if (uriSize == null) {
+                        skippedUnknownSize += 1
+                        return@forEach
+                    }
+                    if (hasStorageLimit && uriSize > remainingBytes) {
+                        skippedOverLimit += 1
+                        return@forEach
+                    }
+                    allowedUris += uri
+                    if (hasStorageLimit) {
+                        remainingBytes -= uriSize
+                    }
+                }
+
+                if (allowedUris.isEmpty()) {
+                    val message = when {
+                        skippedOverLimit > 0 && skippedUnknownSize > 0 ->
+                            "Nothing imported: over storage limit and unknown file sizes."
+                        skippedOverLimit > 0 ->
+                            "Nothing imported: selected files exceed storage limit."
+                        skippedUnknownSize > 0 ->
+                            "Nothing imported: couldn't read selected file sizes."
+                        else -> "Nothing imported."
+                    }
+                    snackbarHostState.showSnackbar(message)
+                    return@launch
+                }
+
                 val result = withContext(Dispatchers.IO) {
-                    trackStore.importTracks(uris)
+                    trackStore.importTracks(allowedUris)
                 }
                 tracks = withContext(Dispatchers.IO) {
                     trackStore.loadTracks()
                 }
+                currentUsageBytes = withContext(Dispatchers.IO) {
+                    computeAppStorageUsageBytes(context)
+                }
+                storageUsageBytes = currentUsageBytes
 
-                val message = when {
+                val baseMessage = when {
                     result.added > 0 && result.failed == 0 -> "Added ${result.added} track(s)"
                     result.added > 0 -> "Added ${result.added}, failed ${result.failed}"
                     else -> "Could not add selected files"
+                }
+                val suffixParts = mutableListOf<String>()
+                if (skippedOverLimit > 0) {
+                    suffixParts += "limit skipped: $skippedOverLimit"
+                }
+                if (skippedUnknownSize > 0) {
+                    suffixParts += "unknown size skipped: $skippedUnknownSize"
+                }
+                val message = if (suffixParts.isEmpty()) {
+                    baseMessage
+                } else {
+                    "$baseMessage (${suffixParts.joinToString()})"
                 }
                 snackbarHostState.showSnackbar(message)
             }
@@ -1045,8 +1450,12 @@ private fun SonoraApp() {
     }
 
     val showScaffoldTopBar = !playerVisible && !inOverlayScreen && !isRootHomePage
+    val accentColor = remember(appSettings.accentHex) {
+        resolveAccentColor(appSettings.accentHex)
+    }
 
-    Scaffold(
+    CompositionLocalProvider(LocalAccentColor provides accentColor) {
+        Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -1137,9 +1546,13 @@ private fun SonoraApp() {
                                         color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
-                                        modifier = if (inPlaylistDetail) {
+                                        modifier = if (isTrackSelectionMode) {
+                                            Modifier
+                                                .align(Alignment.CenterStart)
+                                                .padding(start = 8.dp)
+                                        } else if (inPlaylistDetail) {
                                             Modifier.align(Alignment.Center)
-                                        } else if (showHistoryPage) {
+                                        } else if (showHistoryPage || showSettingsPage) {
                                             Modifier.align(Alignment.Center)
                                         } else {
                                             Modifier
@@ -1180,12 +1593,6 @@ private fun SonoraApp() {
                             ) {
                                 when {
                                     isTrackSelectionMode -> {
-                                        AppVectorIconButton(
-                                            imageVector = Icons.Filled.Close,
-                                            contentDescription = "Cancel selection",
-                                            tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
-                                            onClick = { clearTrackSelection() }
-                                        )
                                         AppIconButton(
                                             iconRes = R.drawable.heart_fill,
                                             contentDescription = "Favorite selected",
@@ -1201,6 +1608,12 @@ private fun SonoraApp() {
                                             iconHeight = 20.dp,
                                             tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
                                             onClick = onSelectionDeleteTap
+                                        )
+                                        AppVectorIconButton(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = "Cancel selection",
+                                            tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
+                                            onClick = { clearTrackSelection() }
                                         )
                                     }
 
@@ -1395,50 +1808,6 @@ private fun SonoraApp() {
                 .padding(innerPadding)
                 .nestedScroll(nestedScrollConnection)
         ) {
-            if (isRootHomePage && !playerVisible && !inOverlayScreen) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .statusBarsPadding()
-                        .height(44.dp)
-                        .padding(horizontal = 8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight(),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            Text(
-                                text = "Home",
-                                style = TextStyle(
-                                    fontFamily = SonoraAndroidYSMusicFontFamily,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 30.sp
-                                ),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        if (tracks.isNotEmpty()) {
-                            AppIconButton(
-                                iconRes = R.drawable.ic_global_clock,
-                                contentDescription = "History",
-                                iconWidth = 18.dp,
-                                iconHeight = 18.dp,
-                                tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
-                                onClick = { showHistoryPage = true }
-                            )
-                        }
-                    }
-                }
-            }
-
             when {
                 isCreateNameScreen -> PlaylistCreateNamePage(
                     name = playlistCreateName,
@@ -1652,7 +2021,23 @@ private fun SonoraApp() {
                     )
                 }
 
-                showSettingsPage -> SettingsPage()
+                showSettingsPage -> SwipeDismissPage(onDismiss = { showSettingsPage = false }) {
+                    SettingsPage(
+                        settings = appSettings,
+                        storageUsedBytes = storageUsageBytes,
+                        appVersionLabel = appVersionLabel,
+                        githubProjectLabel = githubProjectLabel,
+                        storageRootPath = storageRootPath,
+                        libraryTrackCount = tracks.size,
+                        onSettingsChange = { updated ->
+                            appSettings = updated
+                            settingsStore.save(updated)
+                        },
+                        onOpenGithub = {
+                            openExternalUrl(context, githubProjectURL)
+                        }
+                    )
+                }
 
                 showFavoritesPage -> SwipeDismissPage(onDismiss = { showFavoritesPage = false }) {
                     FavoritesPage(
@@ -1909,6 +2294,64 @@ private fun SonoraApp() {
                 )
             }
 
+            if (isRootHomePage && !playerVisible && !inOverlayScreen) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .zIndex(3f)
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(44.dp)
+                        .padding(horizontal = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight(),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            Text(
+                                text = "Home",
+                                style = TextStyle(
+                                    fontFamily = SonoraAndroidYSMusicFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 30.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            if (tracks.isNotEmpty()) {
+                                AppIconButton(
+                                    iconRes = R.drawable.ic_global_clock,
+                                    contentDescription = "History",
+                                    iconWidth = 18.dp,
+                                    iconHeight = 18.dp,
+                                    tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
+                                    onClick = { showHistoryPage = true }
+                                )
+                            }
+                            AppIconButton(
+                                iconRes = R.drawable.ic_global_settings,
+                                contentDescription = "Settings",
+                                iconWidth = 18.dp,
+                                iconHeight = 18.dp,
+                                tint = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface,
+                                onClick = { showSettingsPage = true }
+                            )
+                        }
+                    }
+                }
+            }
+
             val activeMiniTrack = miniPlayerTrack
             if (miniPlayerVisible && activeMiniTrack != null) {
                 Box(
@@ -1946,6 +2389,10 @@ private fun SonoraApp() {
                     isSleepTimerActive = playbackController.isSleepTimerActive,
                     sleepTimerRemainingMs = playbackController.sleepTimerRemainingMs,
                     nextTrack = playbackController.predictedNextTrackForSkip(),
+                    useWaveSlider = appSettings.sliderStyle == PlayerSliderStyle.Wave,
+                    artworkStyle = appSettings.artworkStyle,
+                    accentColor = resolveAccentColor(appSettings.accentHex),
+                    preferredFontFamily = resolveSettingsFontFamily(appSettings.fontStyle),
                     onClose = { playerVisible = false },
                     onTogglePlayPause = { playbackController.togglePlayPause() },
                     onPrevious = { playbackController.playPreviousFromUser() },
@@ -1977,7 +2424,7 @@ private fun SonoraApp() {
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             addTracksTargetPlaylistID = openedPlaylist.id
                             addTracksSelectedIDs = emptySet()
@@ -1987,7 +2434,7 @@ private fun SonoraApp() {
                     ) {
                         Text("Add Music")
                     }
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             coverTargetPlaylistID = openedPlaylist.id
                             showPlaylistOptionsDialog = false
@@ -1997,7 +2444,7 @@ private fun SonoraApp() {
                     ) {
                         Text("Change Cover")
                     }
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             renamePlaylistDraft = openedPlaylist.name
                             showRenamePlaylistDialog = true
@@ -2007,7 +2454,7 @@ private fun SonoraApp() {
                     ) {
                         Text("Rename Playlist")
                     }
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             playlistStore.deletePlaylist(openedPlaylist.id)
                             reloadPlaylists()
@@ -2021,7 +2468,7 @@ private fun SonoraApp() {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showPlaylistOptionsDialog = false }) {
+                AccentTextButton(onClick = { showPlaylistOptionsDialog = false }) {
                     Text("Close")
                 }
             }
@@ -2040,7 +2487,7 @@ private fun SonoraApp() {
                 )
             },
             confirmButton = {
-                TextButton(
+                AccentTextButton(
                     onClick = {
                         val normalized = renamePlaylistDraft.trim()
                         if (normalized.isNotBlank()) {
@@ -2054,7 +2501,7 @@ private fun SonoraApp() {
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRenamePlaylistDialog = false }) {
+                AccentTextButton(onClick = { showRenamePlaylistDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -2121,7 +2568,7 @@ private fun SonoraApp() {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { quickAddTrackID = null }) {
+                AccentTextButton(onClick = { quickAddTrackID = null }) {
                     Text("Close")
                 }
             }
@@ -2139,7 +2586,7 @@ private fun SonoraApp() {
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             playbackController.clearSleepTimer()
                             showSleepTimerDialog = false
@@ -2148,7 +2595,7 @@ private fun SonoraApp() {
                     ) {
                         Text("Off")
                     }
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             playbackController.startSleepTimer(15)
                             showSleepTimerDialog = false
@@ -2157,7 +2604,7 @@ private fun SonoraApp() {
                     ) {
                         Text("15 min")
                     }
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             playbackController.startSleepTimer(30)
                             showSleepTimerDialog = false
@@ -2166,7 +2613,7 @@ private fun SonoraApp() {
                     ) {
                         Text("30 min")
                     }
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             playbackController.startSleepTimer(60)
                             showSleepTimerDialog = false
@@ -2187,7 +2634,7 @@ private fun SonoraApp() {
                         placeholder = { Text("Custom minutes") },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    TextButton(
+                    AccentTextButton(
                         onClick = {
                             playbackController.startSleepTimer(parsedCustomMinutes)
                             showSleepTimerDialog = false
@@ -2200,11 +2647,12 @@ private fun SonoraApp() {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSleepTimerDialog = false }) {
+                AccentTextButton(onClick = { showSleepTimerDialog = false }) {
                     Text("Close")
                 }
             }
         )
+    }
     }
 }
 
@@ -2261,6 +2709,25 @@ private fun AppVectorIconButton(
             modifier = Modifier.size(iconSize)
         )
     }
+}
+
+@Composable
+private fun AccentTextButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = LocalAccentColor.current,
+            disabledContentColor = LocalAccentColor.current.copy(alpha = 0.45f)
+        ),
+        content = content
+    )
 }
 
 @Composable
@@ -2522,7 +2989,7 @@ private fun PlaylistCreateNamePage(
                 .clip(RoundedCornerShape(14.dp))
                 .clickable(enabled = canContinue, onClick = onNext),
             color = if (canContinue) {
-                ru.hippo.Sonora.ui.theme.SonoraAccentYellow
+                LocalAccentColor.current
             } else {
                 Color(0xFF999999).copy(alpha = 0.4f)
             }
@@ -2721,7 +3188,7 @@ private fun SelectableTrackRow(
             Icon(
                 imageVector = Icons.Filled.Check,
                 contentDescription = "Selected",
-                tint = ru.hippo.Sonora.ui.theme.SonoraAccentYellow,
+                tint = LocalAccentColor.current,
                 modifier = Modifier.size(18.dp)
             )
         } else {
@@ -3861,8 +4328,855 @@ private fun HistoryTrackRow(
 }
 
 @Composable
-private fun SettingsPage() {
-    EmptyListLabel(text = "Settings UI")
+private fun SettingsPage(
+    settings: SonoraAppSettings,
+    storageUsedBytes: Long,
+    appVersionLabel: String,
+    githubProjectLabel: String,
+    storageRootPath: String,
+    libraryTrackCount: Int,
+    onSettingsChange: (SonoraAppSettings) -> Unit,
+    onOpenGithub: () -> Unit
+) {
+    val selectedTrackGap = nearestTrackGapSecondsOption(settings.trackGapSeconds)
+    val selectedMaxStorage = nearestMaxStorageOptionMb(settings.maxStorageMb)
+    val hasStorageLimit = selectedMaxStorage > 0
+    val maxStorageBytes = if (hasStorageLimit) {
+        selectedMaxStorage.toLong() * 1_048_576L
+    } else {
+        Long.MAX_VALUE
+    }
+    val usedStorageLabel = remember(storageUsedBytes) { formatStorageSize(storageUsedBytes) }
+    val overLimit = hasStorageLimit && storageUsedBytes > maxStorageBytes
+    val accentHex = normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX
+    val accentPreview = remember(accentHex) { resolveAccentColor(accentHex) }
+    var showAccentColorDialog by rememberSaveable { mutableStateOf(false) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp)
+    ) {
+        item {
+            SettingsSectionHeading(text = "Customization")
+        }
+        item {
+            SettingsCard {
+                SettingsChoiceRow(
+                    title = "Slider in player",
+                    subtitle = "Show wave timeline or clean line",
+                    options = PlayerSliderStyle.values().map { it.label },
+                    selectedIndex = PlayerSliderStyle.values().indexOf(settings.sliderStyle),
+                    onSelect = { index ->
+                        val selected = PlayerSliderStyle.values().getOrElse(index) { PlayerSliderStyle.Wave }
+                        onSettingsChange(settings.copy(sliderStyle = selected))
+                    }
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsSliderStylePreview(useWaveSlider = settings.sliderStyle == PlayerSliderStyle.Wave)
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsChoiceRow(
+                    title = "Artwork style",
+                    subtitle = "Cover shape in player",
+                    options = ArtworkStyle.values().map { it.label },
+                    selectedIndex = ArtworkStyle.values().indexOf(settings.artworkStyle),
+                    onSelect = { index ->
+                        val selected = ArtworkStyle.values().getOrElse(index) { ArtworkStyle.Square }
+                        onSettingsChange(settings.copy(artworkStyle = selected))
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsColorPickerRow(
+                    title = "Accent color",
+                    subtitle = "Custom color with #RRGGBB",
+                    valueLabel = accentHex,
+                    color = accentPreview,
+                    onClick = {
+                        showAccentColorDialog = true
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsChoiceRow(
+                    title = "Font",
+                    subtitle = "Player title and artist",
+                    options = AppFontStyle.values().map { it.label },
+                    selectedIndex = AppFontStyle.values().indexOf(settings.fontStyle),
+                    onSelect = { index ->
+                        val selected = AppFontStyle.values().getOrElse(index) { AppFontStyle.System }
+                        onSettingsChange(settings.copy(fontStyle = selected))
+                    }
+                )
+            }
+        }
+
+        item {
+            SettingsSectionHeading(text = "Sound")
+        }
+        item {
+            SettingsCard {
+                SettingsScrollableChoiceRow(
+                    title = "Delay between tracks",
+                    subtitle = "",
+                    options = TrackGapSecondsOptions.map { formatTrackGapOptionLabel(it) },
+                    selectedIndex = TrackGapSecondsOptions.indexOf(selectedTrackGap).coerceAtLeast(0),
+                    onSelect = { index ->
+                        val selected = TrackGapSecondsOptions.getOrElse(index) { selectedTrackGap }
+                        onSettingsChange(settings.copy(trackGapSeconds = selected))
+                    }
+                )
+            }
+        }
+
+        item {
+            SettingsSectionHeading(text = "Memory")
+        }
+        item {
+            SettingsCard {
+                SettingsInfoRow(
+                    title = "Used by app + songs",
+                    value = usedStorageLabel,
+                    valueColor = if (overLimit) Color(0xFFD93025) else MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsScrollableChoiceRow(
+                    title = "Max player space",
+                    subtitle = if (!hasStorageLimit) {
+                        "No storage limit"
+                    } else if (overLimit) {
+                        "Current usage is above limit. New imports are blocked."
+                    } else {
+                        "Concrete storage presets"
+                    },
+                    options = MaxStorageMbOptions.map { formatMaxStorageOptionLabel(it) },
+                    selectedIndex = MaxStorageMbOptions.indexOf(selectedMaxStorage).coerceAtLeast(0),
+                    onSelect = { index ->
+                        val selected = MaxStorageMbOptions.getOrElse(index) { selectedMaxStorage }
+                        onSettingsChange(settings.copy(maxStorageMb = selected))
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsSwitchRow(
+                    title = "Preserve player settings",
+                    subtitle = "Keep shuffle/repeat after app restart",
+                    checked = settings.preservePlayerModes,
+                    onCheckedChange = { enabled ->
+                        onSettingsChange(settings.copy(preservePlayerModes = enabled))
+                    }
+                )
+            }
+        }
+
+        item {
+            SettingsSectionHeading(text = "About")
+        }
+        item {
+            SettingsCard {
+                SettingsLinkRow(
+                    title = "GitHub project",
+                    value = githubProjectLabel,
+                    onClick = onOpenGithub
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsInfoRow(
+                    title = "Developers",
+                    value = "hippopotamus"
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsInfoRow(
+                    title = "Version",
+                    value = appVersionLabel
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsInfoRow(
+                    title = "Tracks in library",
+                    value = libraryTrackCount.toString()
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsInfoRow(
+                    title = "Storage path",
+                    value = storageRootPath
+                )
+            }
+        }
+    }
+
+    if (showAccentColorDialog) {
+        AccentColorPickerDialog(
+            selectedHex = accentHex,
+            onDismiss = { showAccentColorDialog = false },
+            onColorSelected = { selected ->
+                onSettingsChange(settings.copy(accentHex = selected))
+                showAccentColorDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsSectionHeading(text: String) {
+    Text(
+        text = text,
+        style = TextStyle(
+            fontFamily = SonoraAndroidYSMusicFontFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 24.sp
+        ),
+        color = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp)
+    )
+}
+
+@Composable
+private fun SettingsCard(content: @Composable () -> Unit) {
+    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val cardBackground = if (isDark) {
+        Color.White.copy(alpha = 0.06f)
+    } else {
+        Color.Black.copy(alpha = 0.03f)
+    }
+    val cardBorder = if (isDark) {
+        Color.White.copy(alpha = 0.12f)
+    } else {
+        Color.Black.copy(alpha = 0.09f)
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(cardBackground)
+            .border(1.dp, cardBorder, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun SettingsSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Normal
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = Color.Black,
+                checkedTrackColor = LocalAccentColor.current
+            )
+        )
+    }
+}
+
+@Composable
+private fun SettingsChoiceRow(
+    title: String,
+    subtitle: String,
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        ),
+        color = MaterialTheme.colorScheme.onSurface
+    )
+    Text(
+        text = subtitle,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Normal
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        options.forEachIndexed { index, label ->
+            val selected = selectedIndex == index
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { onSelect(index) },
+                color = if (selected) {
+                    LocalAccentColor.current
+                } else {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                }
+            ) {
+                Box(
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = if (selected) Color.Black else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsScrollableChoiceRow(
+    title: String,
+    subtitle: String,
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    var expanded by remember(title, options) { mutableStateOf(false) }
+    val resolvedIndex = if (options.isEmpty()) {
+        -1
+    } else {
+        selectedIndex.coerceIn(0, options.lastIndex)
+    }
+    val selectedLabel = if (resolvedIndex >= 0) {
+        options[resolvedIndex]
+    } else {
+        "-"
+    }
+
+    Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        ),
+        color = MaterialTheme.colorScheme.onSurface
+    )
+    if (subtitle.isNotBlank()) {
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Normal
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(enabled = options.isNotEmpty()) {
+                    expanded = true
+                },
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = selectedLabel,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Filled.ArrowDropDown,
+                    contentDescription = "Open options",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded && options.isNotEmpty(),
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEachIndexed { index, label ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    },
+                    leadingIcon = if (index == resolvedIndex) {
+                        {
+                            Icon(
+                                imageVector = Icons.Filled.Check,
+                                contentDescription = null,
+                                tint = LocalAccentColor.current,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelect(index)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsColorPickerRow(
+    title: String,
+    subtitle: String,
+    valueLabel: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        ),
+        color = MaterialTheme.colorScheme.onSurface
+    )
+    Text(
+        text = subtitle,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Normal
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = valueLabel,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(color)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f),
+                        shape = CircleShape
+                    )
+            )
+        }
+    }
+}
+
+@Composable
+private fun AccentColorPickerDialog(
+    selectedHex: String,
+    onDismiss: () -> Unit,
+    onColorSelected: (String) -> Unit
+) {
+    val initialColor = remember(selectedHex) { resolveAccentColor(selectedHex) }
+    var red by rememberSaveable(selectedHex) {
+        mutableIntStateOf((initialColor.red * 255f).roundToInt().coerceIn(0, 255))
+    }
+    var green by rememberSaveable(selectedHex) {
+        mutableIntStateOf((initialColor.green * 255f).roundToInt().coerceIn(0, 255))
+    }
+    var blue by rememberSaveable(selectedHex) {
+        mutableIntStateOf((initialColor.blue * 255f).roundToInt().coerceIn(0, 255))
+    }
+    var hexInput by rememberSaveable(selectedHex) { mutableStateOf(formatColorHex(initialColor)) }
+
+    val previewColor = remember(red, green, blue) {
+        Color(red / 255f, green / 255f, blue / 255f, 1f)
+    }
+    val normalizedHex = remember(red, green, blue) { formatColorHex(previewColor) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Accent color") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(previewColor)
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f),
+                                shape = CircleShape
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = normalizedHex,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                TextField(
+                    value = hexInput,
+                    onValueChange = { value ->
+                        var cleaned = value.uppercase()
+                            .filter { it == '#' || it in '0'..'9' || it in 'A'..'F' }
+                        cleaned = if (cleaned.startsWith("#")) cleaned.drop(1) else cleaned
+                        cleaned = cleaned.take(6)
+                        hexInput = if (cleaned.isEmpty()) "#" else "#$cleaned"
+
+                        if (cleaned.length == 6) {
+                            parseHexColor("#$cleaned")?.let { parsed ->
+                                red = (parsed.red * 255f).roundToInt().coerceIn(0, 255)
+                                green = (parsed.green * 255f).roundToInt().coerceIn(0, 255)
+                                blue = (parsed.blue * 255f).roundToInt().coerceIn(0, 255)
+                                hexInput = formatColorHex(parsed)
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    label = { Text("Custom #RRGGBB") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                AccentChannelSlider(
+                    title = "R",
+                    value = red,
+                    trackColor = Color(0xFFE65A5A),
+                    onValueChange = { updated ->
+                        red = updated
+                        hexInput = formatColorHex(Color(red / 255f, green / 255f, blue / 255f, 1f))
+                    }
+                )
+                AccentChannelSlider(
+                    title = "G",
+                    value = green,
+                    trackColor = Color(0xFF47B35D),
+                    onValueChange = { updated ->
+                        green = updated
+                        hexInput = formatColorHex(Color(red / 255f, green / 255f, blue / 255f, 1f))
+                    }
+                )
+                AccentChannelSlider(
+                    title = "B",
+                    value = blue,
+                    trackColor = Color(0xFF4F90FF),
+                    onValueChange = { updated ->
+                        blue = updated
+                        hexInput = formatColorHex(Color(red / 255f, green / 255f, blue / 255f, 1f))
+                    }
+                )
+            }
+        },
+        dismissButton = {
+            AccentTextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        confirmButton = {
+            AccentTextButton(
+                onClick = {
+                    onColorSelected(normalizedHex)
+                }
+            ) {
+                Text("Apply")
+            }
+        }
+    )
+}
+
+@Composable
+private fun AccentChannelSlider(
+    title: String,
+    value: Int,
+    trackColor: Color,
+    onValueChange: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = value.toString(),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { updated ->
+                onValueChange(updated.roundToInt().coerceIn(0, 255))
+            },
+            valueRange = 0f..255f,
+            steps = 254,
+            colors = SliderDefaults.colors(
+                thumbColor = trackColor,
+                activeTrackColor = trackColor,
+                inactiveTrackColor = trackColor.copy(alpha = 0.24f)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun SettingsSliderStylePreview(useWaveSlider: Boolean) {
+    val activeColor = MaterialTheme.colorScheme.onSurface
+    val inactiveColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "Preview",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = "How timeline looks in player",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Normal
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(26.dp)
+        ) {
+            val progress = 0.42f
+            val progressX = size.width * progress
+            val centerY = size.height / 2f
+            val lineHeight = 2.dp.toPx()
+
+            if (progressX > 0f) {
+                if (useWaveSlider) {
+                    val path = androidx.compose.ui.graphics.Path()
+                    val waveStep = 2.dp.toPx().coerceAtLeast(1f)
+                    val wavelength = 18.dp.toPx()
+                    val amplitude = 2.1.dp.toPx()
+                    val rampLength = 12.dp.toPx()
+                    val twoPi = (Math.PI * 2).toFloat()
+
+                    var x = 0f
+                    path.moveTo(0f, centerY)
+                    while (x <= progressX) {
+                        val phase = ((x / wavelength) * twoPi)
+                        val envelope = (x / rampLength).coerceIn(0f, 1f)
+                        val y = centerY + (sin(phase.toDouble()).toFloat() * amplitude * envelope)
+                        path.lineTo(x, y)
+                        x += waveStep
+                    }
+                    drawPath(
+                        path = path,
+                        color = activeColor,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = 1.8.dp.toPx(),
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                            join = androidx.compose.ui.graphics.StrokeJoin.Round
+                        )
+                    )
+                } else {
+                    drawRoundRect(
+                        color = activeColor,
+                        topLeft = Offset(0f, centerY - (lineHeight * 0.5f)),
+                        size = Size(progressX, lineHeight),
+                        cornerRadius = CornerRadius(lineHeight * 0.5f, lineHeight * 0.5f)
+                    )
+                }
+            }
+
+            if (progressX < size.width) {
+                drawRoundRect(
+                    color = inactiveColor,
+                    topLeft = Offset(progressX, centerY - (lineHeight * 0.5f)),
+                    size = Size(size.width - progressX, lineHeight),
+                    cornerRadius = CornerRadius(lineHeight * 0.5f, lineHeight * 0.5f)
+                )
+            }
+
+            val thumbWidth = 4.dp.toPx()
+            val thumbHeight = 18.dp.toPx()
+            drawRoundRect(
+                color = activeColor,
+                topLeft = Offset(
+                    (progressX - (thumbWidth * 0.5f)).coerceIn(0f, size.width - thumbWidth),
+                    centerY - (thumbHeight * 0.5f)
+                ),
+                size = Size(thumbWidth, thumbHeight),
+                cornerRadius = CornerRadius(thumbWidth * 0.5f, thumbWidth * 0.5f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsSliderRow(
+    title: String,
+    subtitle: String,
+    valueLabel: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        ),
+        color = MaterialTheme.colorScheme.onSurface
+    )
+    Text(
+        text = subtitle,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Normal
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+        text = valueLabel,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        ),
+        color = MaterialTheme.colorScheme.onSurface
+    )
+    Slider(
+        value = value,
+        onValueChange = onValueChange,
+        valueRange = valueRange,
+        steps = steps
+    )
+}
+
+@Composable
+private fun SettingsInfoRow(
+    title: String,
+    value: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+        text = value,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        ),
+        color = valueColor
+    )
+}
+
+@Composable
+private fun SettingsLinkRow(
+    title: String,
+    value: String,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 2.dp, vertical = 2.dp)
+    ) {
+        SettingsInfoRow(title = title, value = value)
+    }
 }
 
 @Composable
@@ -4502,7 +5816,7 @@ private fun PlaylistDetailHeader(
                 iconSize = 29.dp,
                 iconWidth = 24.5.dp,
                 iconHeight = 29.dp,
-                tint = if (isSleepTimerActive) ru.hippo.Sonora.ui.theme.SonoraAccentYellow else primaryColor
+                tint = if (isSleepTimerActive) LocalAccentColor.current else primaryColor
             )
 
             Surface(
@@ -4829,7 +6143,7 @@ private fun TrackRow(
     isSelected: Boolean = false,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
-    activeColor: Color = MaterialTheme.colorScheme.primary,
+    activeColor: Color = LocalAccentColor.current,
     startActions: List<SwipeTrackAction>,
     endActions: List<SwipeTrackAction>
 ) {
@@ -4840,7 +6154,7 @@ private fun TrackRow(
     val maxEndOffset = if (endActions.isEmpty()) 0f else actionWidthPx * endActions.size
     val fullSwipeTrigger = with(density) { 108.dp.toPx() }
     val rowBackground = if (isSelected) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        LocalAccentColor.current.copy(alpha = 0.14f)
     } else {
         MaterialTheme.colorScheme.background
     }
@@ -4973,7 +6287,7 @@ private fun TrackRow(
                     Icon(
                         imageVector = Icons.Filled.Check,
                         contentDescription = "Selected",
-                        tint = ru.hippo.Sonora.ui.theme.SonoraAccentYellow,
+                        tint = LocalAccentColor.current,
                         modifier = Modifier.size(18.dp)
                     )
                 } else if (showsPlaybackIndicator && !selectionMode) {
@@ -5390,6 +6704,7 @@ private fun PlainControlButton(
     iconSize: Dp,
     iconWidth: Dp = iconSize,
     iconHeight: Dp = iconSize,
+    cornerRadius: Dp = 999.dp,
     tint: Color,
     disabledAlpha: Float = 0.45f
 ) {
@@ -5397,7 +6712,7 @@ private fun PlainControlButton(
         modifier = Modifier
             .size(size)
             .alpha(if (enabled) 1f else disabledAlpha)
-            .clip(RoundedCornerShape(999.dp))
+            .clip(RoundedCornerShape(cornerRadius))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -5591,6 +6906,10 @@ private fun PlayerView(
     isSleepTimerActive: Boolean,
     sleepTimerRemainingMs: Long,
     nextTrack: TrackItem?,
+    useWaveSlider: Boolean,
+    artworkStyle: ArtworkStyle,
+    accentColor: Color,
+    preferredFontFamily: FontFamily?,
     onClose: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -5609,6 +6928,7 @@ private fun PlayerView(
     val primaryColor = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
     val secondaryColor = if (isDark) Color.White.copy(alpha = 0.66f) else MaterialTheme.colorScheme.onSurfaceVariant
     val controlColor = if (hasQueue) primaryColor else secondaryColor.copy(alpha = 0.65f)
+    val playerButtonCornerRadius = 0.dp
     val nextPreviewText = remember(nextTrack?.id, nextTrack?.title, nextTrack?.artist) {
         buildNextPreviewText(nextTrack)
     }
@@ -5633,8 +6953,8 @@ private fun PlayerView(
         }
     }
 
-    LaunchedEffect(track.id, isPlaying, hasQueue) {
-        if (!isPlaying || !hasQueue) {
+    LaunchedEffect(track.id, isPlaying, hasQueue, useWaveSlider) {
+        if (!useWaveSlider || !isPlaying || !hasQueue) {
             return@LaunchedEffect
         }
         val angularSpeed = ((Math.PI * 2.0) / 2.6).toFloat()
@@ -5660,13 +6980,7 @@ private fun PlayerView(
             val sliderBaseColor = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
             val sliderActiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 1f else 0.45f)
             val sliderInactiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 0.26f else 0.12f)
-            val controlLift = if (maxHeight > 760.dp) {
-                val candidate = (maxHeight - 760.dp) * 0.24f
-                minOf(candidate, 56.dp)
-            } else {
-                0.dp
-            }
-            val controlsBottomPadding = 6.dp + controlLift
+            val controlsBottomPadding = 6.dp
             val sliderColors = SliderDefaults.colors(
                 thumbColor = sliderActiveColor,
                 activeTrackColor = sliderActiveColor,
@@ -5678,15 +6992,32 @@ private fun PlayerView(
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
-                TrackArtwork(
-                    track = track,
-                    placeholderRes = R.drawable.tab_note,
-                    placeholderSize = 96.dp,
-                    decodeMaxSize = 1024,
+                val artworkInset = if (artworkStyle == ArtworkStyle.Rounded) 12.dp else 0.dp
+                val artworkShape = RoundedCornerShape(22.dp)
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(artworkHeight)
-                )
+                ) {
+                    val artworkModifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = artworkInset)
+                        .then(
+                            if (artworkStyle == ArtworkStyle.Rounded) {
+                                Modifier.clip(artworkShape)
+                            } else {
+                                Modifier
+                            }
+                        )
+
+                    TrackArtwork(
+                        track = track,
+                        placeholderRes = R.drawable.tab_note,
+                        placeholderSize = 96.dp,
+                        decodeMaxSize = 1024,
+                        modifier = artworkModifier
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -5707,13 +7038,21 @@ private fun PlayerView(
                     valueRange = 0f..sliderMax,
                     colors = sliderColors,
                     track = { sliderState ->
-                        WaveSliderTrack(
-                            sliderState = sliderState,
-                            activeColor = sliderActiveColor,
-                            inactiveColor = sliderInactiveColor,
-                            wavePhase = wavePhase,
-                            waveSeed = waveSeed
-                        )
+                        if (useWaveSlider) {
+                            WaveSliderTrack(
+                                sliderState = sliderState,
+                                activeColor = sliderActiveColor,
+                                inactiveColor = sliderInactiveColor,
+                                wavePhase = wavePhase,
+                                waveSeed = waveSeed
+                            )
+                        } else {
+                            LinearSliderTrack(
+                                sliderState = sliderState,
+                                activeColor = sliderActiveColor,
+                                inactiveColor = sliderInactiveColor
+                            )
+                        }
                     },
                     thumb = {
                         Canvas(modifier = Modifier.size(width = 22.dp, height = 26.dp)) {
@@ -5775,6 +7114,7 @@ private fun PlayerView(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
                     style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = preferredFontFamily ?: MaterialTheme.typography.bodyMedium.fontFamily,
                         fontSize = 24.sp,
                         fontWeight = FontWeight.SemiBold
                     ),
@@ -5792,6 +7132,7 @@ private fun PlayerView(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
                     style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = preferredFontFamily ?: MaterialTheme.typography.bodyMedium.fontFamily,
                         fontSize = 24.sp,
                         fontWeight = FontWeight.SemiBold
                     ),
@@ -5810,6 +7151,7 @@ private fun PlayerView(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp),
                     style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = preferredFontFamily ?: MaterialTheme.typography.bodyMedium.fontFamily,
                         fontSize = 18.sp,
                         fontWeight = FontWeight.SemiBold
                     ),
@@ -5839,15 +7181,16 @@ private fun PlayerView(
                         val repeatTint = if (repeatMode == RepeatMode.None) {
                             primaryColor.copy(alpha = 0.92f)
                         } else {
-                            ru.hippo.Sonora.ui.theme.SonoraAccentYellow
+                            accentColor
                         }
                         PlainControlButton(
                             iconRes = repeatIcon,
                             contentDescription = "Repeat",
                             onClick = onCycleRepeat,
                             enabled = hasQueue,
-                            size = 42.dp,
+                            size = 40.dp,
                             iconSize = 24.dp,
+                            cornerRadius = playerButtonCornerRadius,
                             tint = repeatTint
                         )
                         PlainControlButton(
@@ -5855,10 +7198,11 @@ private fun PlayerView(
                             contentDescription = "Shuffle",
                             onClick = onToggleShuffle,
                             enabled = hasQueue,
-                            size = 42.dp,
+                            size = 40.dp,
                             iconSize = 24.dp,
+                            cornerRadius = playerButtonCornerRadius,
                             tint = if (isShuffleEnabled) {
-                                ru.hippo.Sonora.ui.theme.SonoraAccentYellow
+                                accentColor
                             } else {
                                 primaryColor.copy(alpha = 0.92f)
                             }
@@ -5877,6 +7221,7 @@ private fun PlayerView(
                             enabled = canStep,
                             size = 64.dp,
                             iconSize = 44.dp,
+                            cornerRadius = playerButtonCornerRadius,
                             tint = controlColor
                         )
                         PlainControlButton(
@@ -5886,6 +7231,7 @@ private fun PlayerView(
                             enabled = hasQueue,
                             size = 76.dp,
                             iconSize = 56.dp,
+                            cornerRadius = playerButtonCornerRadius,
                             tint = controlColor
                         )
                         PlainControlButton(
@@ -5895,6 +7241,7 @@ private fun PlayerView(
                             enabled = canStep,
                             size = 64.dp,
                             iconSize = 44.dp,
+                            cornerRadius = playerButtonCornerRadius,
                             tint = controlColor
                         )
                     }
@@ -5913,8 +7260,9 @@ private fun PlayerView(
                             iconSize = 29.dp,
                             iconWidth = 24.5.dp,
                             iconHeight = 29.dp,
+                            cornerRadius = playerButtonCornerRadius,
                             tint = if (isSleepTimerActive) {
-                                ru.hippo.Sonora.ui.theme.SonoraAccentYellow
+                                accentColor
                             } else {
                                 primaryColor.copy(alpha = 0.92f)
                             }
@@ -5926,6 +7274,7 @@ private fun PlayerView(
                             enabled = true,
                             size = 40.dp,
                             iconSize = 24.dp,
+                            cornerRadius = playerButtonCornerRadius,
                             tint = if (isFavorite) {
                                 Color(0xFFFF5966)
                             } else {
@@ -6025,6 +7374,47 @@ private fun WaveSliderTrack(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LinearSliderTrack(
+    sliderState: SliderState,
+    activeColor: Color,
+    inactiveColor: Color
+) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(24.dp)
+    ) {
+        val start = sliderState.valueRange.start
+        val end = sliderState.valueRange.endInclusive
+        val total = (end - start).coerceAtLeast(1f)
+        val value = sliderState.value.coerceIn(start, end)
+        val progress = ((value - start) / total).coerceIn(0f, 1f)
+        val progressX = size.width * progress
+        val centerY = size.height / 2f
+        val lineHeight = 2.dp.toPx()
+
+        if (progressX > 0f) {
+            drawRoundRect(
+                color = activeColor,
+                topLeft = Offset(0f, centerY - (lineHeight * 0.5f)),
+                size = Size(progressX, lineHeight),
+                cornerRadius = CornerRadius(lineHeight * 0.5f, lineHeight * 0.5f)
+            )
+        }
+
+        if (progressX < size.width) {
+            drawRoundRect(
+                color = inactiveColor,
+                topLeft = Offset(progressX, centerY - (lineHeight * 0.5f)),
+                size = Size(size.width - progressX, lineHeight),
+                cornerRadius = CornerRadius(lineHeight * 0.5f, lineHeight * 0.5f)
+            )
+        }
+    }
+}
+
 private fun buildNextPreviewText(nextTrack: TrackItem?): String {
     if (nextTrack == null) {
         return "Next: -"
@@ -6088,12 +7478,12 @@ private fun AddTracksDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onAdd) {
+            AccentTextButton(onClick = onAdd) {
                 Text("Add")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            AccentTextButton(onClick = onDismiss) {
                 Text("Cancel")
             }
         }
@@ -6760,6 +8150,192 @@ private fun extractDominantAccentColor(bitmap: android.graphics.Bitmap): Color? 
     accentHsv[1] = (accentHsv[1] * 1.14f).coerceIn(0f, 1f)
     accentHsv[2] = (accentHsv[2] * 1.04f).coerceIn(0f, 1f)
     return Color(android.graphics.Color.HSVToColor(accentHsv))
+}
+
+private fun resolveLegacyAccentColorFromHue(hue: Float): Color {
+    val normalized = nearestAccentHue(hue)
+    return Color.hsv(
+        hue = normalized,
+        saturation = 0.76f,
+        value = 1.0f
+    )
+}
+
+private fun resolveAccentColor(hex: String): Color {
+    return parseHexColor(hex)
+        ?: parseHexColor(DEFAULT_ACCENT_HEX)
+        ?: Color(0xFFE6BE00)
+}
+
+private fun parseHexColor(raw: String?): Color? {
+    if (raw.isNullOrBlank()) {
+        return null
+    }
+    val trimmed = raw.trim().removePrefix("#")
+    if (trimmed.length != 6 || trimmed.any { it !in '0'..'9' && it !in 'a'..'f' && it !in 'A'..'F' }) {
+        return null
+    }
+    val rgb = trimmed.toIntOrNull(16) ?: return null
+    val red = ((rgb shr 16) and 0xFF) / 255f
+    val green = ((rgb shr 8) and 0xFF) / 255f
+    val blue = (rgb and 0xFF) / 255f
+    return Color(red, green, blue, 1f)
+}
+
+private fun normalizeHexColor(raw: String?): String? {
+    return parseHexColor(raw)?.let { formatColorHex(it) }
+}
+
+private fun formatColorHex(color: Color): String {
+    val red = (color.red * 255f).roundToInt().coerceIn(0, 255)
+    val green = (color.green * 255f).roundToInt().coerceIn(0, 255)
+    val blue = (color.blue * 255f).roundToInt().coerceIn(0, 255)
+    return String.format("#%02X%02X%02X", red, green, blue)
+}
+
+private fun resolveSettingsFontFamily(style: AppFontStyle): FontFamily? {
+    return when (style) {
+        AppFontStyle.System -> null
+        AppFontStyle.Serif -> SonoraAndroidNotoSerifFamily
+    }
+}
+
+private fun openExternalUrl(context: Context, url: String) {
+    if (url.isBlank()) {
+        return
+    }
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    runCatching {
+        context.startActivity(intent)
+    }
+}
+
+private fun resolveAppVersionLabel(context: Context): String {
+    val packageInfo = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }.getOrNull() ?: return "1.0"
+
+    val versionName = packageInfo.versionName?.takeIf { it.isNotBlank() }
+    val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        packageInfo.longVersionCode.toString()
+    } else {
+        @Suppress("DEPRECATION")
+        packageInfo.versionCode.toString()
+    }
+
+    return if (!versionName.isNullOrBlank() && versionName != versionCode) {
+        "$versionName ($versionCode)"
+    } else {
+        versionName ?: versionCode
+    }
+}
+
+private fun computeAppStorageUsageBytes(context: Context): Long {
+    return directorySizeBytes(context.filesDir)
+}
+
+private fun directorySizeBytes(file: File): Long {
+    if (!file.exists()) {
+        return 0L
+    }
+    if (file.isFile) {
+        return file.length().coerceAtLeast(0L)
+    }
+
+    val children = file.listFiles() ?: return 0L
+    var total = 0L
+    for (child in children) {
+        total += directorySizeBytes(child)
+    }
+    return total
+}
+
+private fun queryUriSizeBytes(context: Context, uri: Uri): Long? {
+    return runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            val column = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (column == -1 || !cursor.moveToFirst() || cursor.isNull(column)) {
+                null
+            } else {
+                cursor.getLong(column).takeIf { it >= 0L }
+            }
+        }
+    }.getOrNull()
+}
+
+private fun formatStoragePathForAbout(path: String): String {
+    if (path.isBlank()) {
+        return "-"
+    }
+    val withoutFilesSuffix = path.removeSuffix("/files")
+    val normalized = if (withoutFilesSuffix.isBlank()) path else withoutFilesSuffix
+    if (normalized.length <= 38) {
+        return normalized
+    }
+    val parts = normalized.split('/').filter { it.isNotBlank() }
+    return if (parts.size >= 2) {
+        ".../${parts.takeLast(2).joinToString("/")}"
+    } else {
+        normalized.takeLast(38)
+    }
+}
+
+private fun formatStorageSize(bytes: Long): String {
+    if (bytes <= 0L) {
+        return "0 B"
+    }
+    val kb = 1024.0
+    val mb = kb * 1024.0
+    val gb = mb * 1024.0
+    val tb = gb * 1024.0
+    val value = bytes.toDouble()
+    return when {
+        value >= tb -> String.format("%.2f TB", value / tb)
+        value >= gb -> String.format("%.2f GB", value / gb)
+        value >= mb -> String.format("%.1f MB", value / mb)
+        value >= kb -> String.format("%.1f KB", value / kb)
+        else -> "$bytes B"
+    }
+}
+
+private fun formatTrackGapOptionLabel(seconds: Float): String {
+    if (seconds <= 0.01f) {
+        return "Off"
+    }
+    val rounded = ((seconds * 10f).roundToInt() / 10f).coerceAtLeast(0f)
+    val whole = rounded.roundToInt().toFloat()
+    return if (abs(rounded - whole) < 0.05f) {
+        "${whole.toInt()} s"
+    } else {
+        "${String.format("%.1f", rounded)} s"
+    }
+}
+
+private fun formatMaxStorageOptionLabel(sizeMb: Int): String {
+    val normalized = nearestMaxStorageOptionMb(sizeMb)
+    if (normalized <= 0) {
+        return "Unlimited"
+    }
+    val gb = normalized / 1024f
+    val rounded = ((gb * 10f).roundToInt() / 10f).coerceAtLeast(0f)
+    val whole = rounded.roundToInt().toFloat()
+    return if (rounded >= 1f) {
+        if (abs(rounded - whole) < 0.05f) {
+            "${whole.toInt()} GB"
+        } else {
+            "${String.format("%.1f", rounded)} GB"
+        }
+    } else {
+        "$normalized MB"
+    }
 }
 
 private fun formatDuration(durationMs: Long): String {

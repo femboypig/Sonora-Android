@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
+import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +87,8 @@ class PlaybackController(
     private var queue: List<TrackItem> = emptyList()
     private var currentIndex: Int = -1
     private var sleepTimerJob: Job? = null
+    private var pendingAutoNextJob: Job? = null
+    private var trackGapDelayMs: Long = 0L
 
     init {
         createNotificationChannel()
@@ -156,6 +159,10 @@ class PlaybackController(
         updateExternalState()
     }
 
+    fun applyAudioSettings(trackGapSeconds: Float) {
+        trackGapDelayMs = (trackGapSeconds.coerceIn(0f, 8f) * 1000f).roundToLong()
+    }
+
     fun predictedNextTrackForSkip(): TrackItem? {
         val nextIndex = predictedNextIndex() ?: return null
         return queue.getOrNull(nextIndex)
@@ -166,6 +173,8 @@ class PlaybackController(
             stop()
             return
         }
+
+        cancelPendingAutoNext()
 
         if (currentTrackId == targetTrackId && isSameQueue(queue)) {
             togglePlayPause()
@@ -192,7 +201,49 @@ class PlaybackController(
         return isSameQueue(queue)
     }
 
+    fun currentQueueTrackIds(): List<String> {
+        return queue.map { it.id }
+    }
+
+    fun restoreSession(
+        queue: List<TrackItem>,
+        targetTrackId: String,
+        positionMs: Long,
+        shouldPlay: Boolean,
+        shuffleEnabled: Boolean,
+        repeatMode: RepeatMode
+    ) {
+        if (queue.isEmpty() || targetTrackId.isBlank()) {
+            return
+        }
+
+        applyRepeatMode(repeatMode)
+        applyShuffleEnabled(shuffleEnabled)
+        playOrToggleFromQueue(queue = queue, targetTrackId = targetTrackId)
+        val clampedPosition = positionMs.coerceAtLeast(0L)
+
+        if (!shouldPlay) {
+            mediaPlayer?.let { player ->
+                runCatching { player.setVolume(0f, 0f) }
+                seekTo(clampedPosition)
+                if (player.isPlaying) {
+                    player.pause()
+                }
+                isPlaying = false
+                runCatching { player.setVolume(1f, 1f) }
+                updateExternalState()
+            }
+            return
+        }
+
+        seekTo(clampedPosition)
+        if (!isPlaying) {
+            togglePlayPause()
+        }
+    }
+
     fun togglePlayPause() {
+        cancelPendingAutoNext()
         val player = mediaPlayer ?: return
         if (isPlaying) {
             player.pause()
@@ -205,17 +256,32 @@ class PlaybackController(
     }
 
     fun toggleShuffleEnabled() {
-        isShuffleEnabled = !isShuffleEnabled
+        applyShuffleEnabled(!isShuffleEnabled)
+    }
+
+    fun applyShuffleEnabled(enabled: Boolean) {
+        if (isShuffleEnabled == enabled) {
+            return
+        }
+        isShuffleEnabled = enabled
         resetShuffleState()
         updateExternalState()
     }
 
     fun cycleRepeatMode() {
-        repeatMode = when (repeatMode) {
+        val nextMode = when (repeatMode) {
             RepeatMode.None -> RepeatMode.Queue
             RepeatMode.Queue -> RepeatMode.Track
             RepeatMode.Track -> RepeatMode.None
         }
+        applyRepeatMode(nextMode)
+    }
+
+    fun applyRepeatMode(mode: RepeatMode) {
+        if (repeatMode == mode) {
+            return
+        }
+        repeatMode = mode
         updateExternalState()
     }
 
@@ -234,11 +300,13 @@ class PlaybackController(
     }
 
     fun playNextFromUser(): Boolean {
+        cancelPendingAutoNext()
         recordSkipCurrentTrack()
         return playNextInternal(automatic = false)
     }
 
     fun playPreviousFromUser(): Boolean {
+        cancelPendingAutoNext()
         recordSkipCurrentTrack()
         return playPreviousInternal()
     }
@@ -253,6 +321,7 @@ class PlaybackController(
     }
 
     fun stop() {
+        cancelPendingAutoNext()
         stopPlayer()
         queue = emptyList()
         queueCount = 0
@@ -274,7 +343,7 @@ class PlaybackController(
 
     private fun playNextInternal(automatic: Boolean): Boolean {
         val nextIndex = resolveNextIndex(automatic) ?: run {
-            stop()
+            stopAtQueueEnd()
             return false
         }
 
@@ -424,6 +493,7 @@ class PlaybackController(
     private fun playAt(index: Int): Boolean {
         val track = queue.getOrNull(index) ?: return false
 
+        cancelPendingAutoNext()
         stopPlayer()
         val player = try {
             MediaPlayer().apply {
@@ -436,11 +506,10 @@ class PlaybackController(
                 setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK)
                 setDataSource(track.filePath)
                 setOnCompletionListener {
-                    if (!playNextInternal(automatic = true)) {
-                        this@PlaybackController.stop()
-                    }
+                    handleTrackCompleted()
                 }
                 prepare()
+                setVolume(1.0f, 1.0f)
                 start()
             }
         } catch (_: Exception) {
@@ -468,9 +537,50 @@ class PlaybackController(
     }
 
     private fun stopPlayer() {
+        cancelPendingAutoNext()
         mediaPlayer?.setOnCompletionListener(null)
         mediaPlayer?.release()
         mediaPlayer = null
+    }
+
+    private fun handleTrackCompleted() {
+        cancelPendingAutoNext()
+        if (trackGapDelayMs <= 0L) {
+            if (!playNextInternal(automatic = true)) {
+                stopAtQueueEnd()
+            }
+            return
+        }
+
+        isPlaying = false
+        updateExternalState()
+
+        pendingAutoNextJob = scope.launch {
+            delay(trackGapDelayMs)
+            if (!playNextInternal(automatic = true)) {
+                stopAtQueueEnd()
+            }
+        }
+    }
+
+    private fun stopAtQueueEnd() {
+        cancelPendingAutoNext()
+        stopPlayer()
+        isPlaying = false
+        clearSleepTimer()
+        if (queue.isEmpty()) {
+            currentIndex = -1
+            currentTrackId = null
+        } else {
+            currentIndex = currentIndex.coerceIn(0, queue.lastIndex)
+            currentTrackId = queue.getOrNull(currentIndex)?.id
+        }
+        updateExternalState()
+    }
+
+    private fun cancelPendingAutoNext() {
+        pendingAutoNextJob?.cancel()
+        pendingAutoNextJob = null
     }
 
     private fun isSameQueue(other: List<TrackItem>): Boolean {
