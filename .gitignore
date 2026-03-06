@@ -15,6 +15,7 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+.kotlin/
 
 # Keystore
 *.jks
