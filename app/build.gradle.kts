@@ -3,6 +3,10 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+fun String.escapeForBuildConfig(): String {
+    return this.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 android {
     namespace = "ru.hippo.Sonora"
     compileSdk {
@@ -17,6 +21,9 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        val backendBaseUrl = ((project.findProperty("BACKEND_BASE_URL") as String?) ?: "https://api.corebrew.ru").escapeForBuildConfig()
+        buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -36,6 +43,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

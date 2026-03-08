@@ -22,6 +22,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.math.roundToLong
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
@@ -89,6 +91,14 @@ class PlaybackController(
     private var sleepTimerJob: Job? = null
     private var pendingAutoNextJob: Job? = null
     private var trackGapDelayMs: Long = 0L
+    private var pendingSeekPositionMs: Long = -1L
+    private var pendingSeekSetAtMs: Long = 0L
+    private val pendingSeekHoldTimeoutMs: Long = 15_000L
+
+    private fun clearPendingSeekHold() {
+        pendingSeekPositionMs = -1L
+        pendingSeekSetAtMs = 0L
+    }
 
     init {
         createNotificationChannel()
@@ -136,8 +146,20 @@ class PlaybackController(
     }
 
     fun currentPositionMs(): Long {
-        val position = mediaPlayer?.currentPosition ?: 0
-        return position.toLong().coerceAtLeast(0L)
+        val player = mediaPlayer
+        val position = (player?.currentPosition ?: 0).toLong().coerceAtLeast(0L)
+        val pendingSeek = pendingSeekPositionMs
+        if (pendingSeek < 0L) {
+            return position
+        }
+        val elapsed = android.os.SystemClock.elapsedRealtime() - pendingSeekSetAtMs
+        val reached = kotlin.math.abs(position - pendingSeek) <= 1500L
+        val expired = elapsed >= pendingSeekHoldTimeoutMs
+        if (reached || expired || player == null) {
+            clearPendingSeekHold()
+            return position
+        }
+        return pendingSeek
     }
 
     fun durationMs(): Long {
@@ -149,12 +171,18 @@ class PlaybackController(
     }
 
     fun seekTo(positionMs: Long) {
-        val player = mediaPlayer ?: return
+        val player = mediaPlayer ?: run {
+            clearPendingSeekHold()
+            return
+        }
         val duration = player.duration
         if (duration <= 0) {
+            clearPendingSeekHold()
             return
         }
         val clamped = positionMs.coerceIn(0L, duration.toLong())
+        pendingSeekPositionMs = clamped
+        pendingSeekSetAtMs = android.os.SystemClock.elapsedRealtime()
         player.seekTo(clamped.toInt())
         updateExternalState()
     }
@@ -203,6 +231,23 @@ class PlaybackController(
 
     fun currentQueueTrackIds(): List<String> {
         return queue.map { it.id }
+    }
+
+    fun replaceQueuePreservingCurrent(updatedQueue: List<TrackItem>) {
+        if (updatedQueue.isEmpty()) {
+            return
+        }
+        val currentId = currentTrackId ?: return
+        val nextIndex = updatedQueue.indexOfFirst { it.id == currentId }
+        if (nextIndex < 0) {
+            return
+        }
+
+        queue = updatedQueue
+        queueCount = updatedQueue.size
+        currentIndex = nextIndex
+        resetShuffleState()
+        updateExternalState()
     }
 
     fun restoreSession(
@@ -494,6 +539,7 @@ class PlaybackController(
         val track = queue.getOrNull(index) ?: return false
 
         cancelPendingAutoNext()
+        clearPendingSeekHold()
         stopPlayer()
         val player = try {
             MediaPlayer().apply {
@@ -538,6 +584,7 @@ class PlaybackController(
 
     private fun stopPlayer() {
         cancelPendingAutoNext()
+        clearPendingSeekHold()
         mediaPlayer?.setOnCompletionListener(null)
         mediaPlayer?.release()
         mediaPlayer = null
@@ -742,17 +789,47 @@ class PlaybackController(
         artworkCache[track.id]?.let { return it }
 
         val fileBitmap = track.artworkPath?.takeIf { it.isNotBlank() }?.let { path ->
-            val artworkFile = File(path)
-            if (artworkFile.exists()) {
-                BitmapFactory.decodeFile(path)
+            if (path.startsWith("http://", ignoreCase = true) ||
+                path.startsWith("https://", ignoreCase = true)
+            ) {
+                decodeRemoteArtwork(path)
             } else {
-                null
+                val artworkFile = File(path)
+                if (artworkFile.exists()) {
+                    BitmapFactory.decodeFile(path)
+                } else {
+                    null
+                }
             }
         }
 
         val resolved = fileBitmap ?: decodeEmbeddedArtwork(track.filePath)
         artworkCache[track.id] = resolved
         return resolved
+    }
+
+    private fun decodeRemoteArtwork(url: String): Bitmap? {
+        return runCatching {
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                instanceFollowRedirects = true
+                connectTimeout = 12_000
+                readTimeout = 15_000
+                setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+            }
+            connection.connect()
+            if (connection.responseCode !in 200..299) {
+                connection.disconnect()
+                return@runCatching null
+            }
+            val bytes = connection.inputStream.use { it.readBytes() }
+            connection.disconnect()
+            if (bytes.isEmpty()) {
+                null
+            } else {
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }
+        }.getOrNull()
     }
 
     private fun decodeEmbeddedArtwork(filePath: String): Bitmap? {

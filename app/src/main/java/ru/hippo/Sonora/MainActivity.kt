@@ -25,6 +25,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +64,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -102,10 +104,12 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -127,6 +131,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -141,15 +147,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.UUID
 import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.hippo.Sonora.music.MiniStreamingArtist
+import ru.hippo.Sonora.music.MiniStreamingClient
+import ru.hippo.Sonora.music.MiniStreamingDownloadPayload
+import ru.hippo.Sonora.music.MiniStreamingTrack
 import ru.hippo.Sonora.music.PlaybackController
 import ru.hippo.Sonora.music.PlaybackHistoryStore
 import ru.hippo.Sonora.music.PlaylistStore
@@ -368,6 +385,37 @@ private class SonoraSettingsStore(context: Context) {
             .apply()
     }
 
+    fun loadMiniStreamingInstalledTrackMap(): Map<String, String> {
+        val raw = prefs.getString(KEY_MINI_STREAMING_TRACK_MAP_JSON, null)
+            ?.takeIf { it.isNotBlank() }
+            ?: return emptyMap()
+        return runCatching {
+            val json = JSONObject(raw)
+            buildMap {
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val trackId = keys.next()?.trim().orEmpty()
+                    val localTrackId = json.optString(trackId).trim()
+                    if (trackId.isNotBlank() && localTrackId.isNotBlank()) {
+                        put(trackId, localTrackId)
+                    }
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun saveMiniStreamingInstalledTrackMap(map: Map<String, String>) {
+        val json = JSONObject()
+        map.forEach { (trackId, localTrackId) ->
+            if (trackId.isNotBlank() && localTrackId.isNotBlank()) {
+                json.put(trackId, localTrackId)
+            }
+        }
+        prefs.edit()
+            .putString(KEY_MINI_STREAMING_TRACK_MAP_JSON, json.toString())
+            .apply()
+    }
+
     private companion object {
         const val KEY_SLIDER_STYLE = "player_slider_style"
         const val KEY_ARTWORK_STYLE = "artwork_style"
@@ -384,10 +432,16 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_SESSION_IS_PLAYING = "playback_session_is_playing"
         const val KEY_SESSION_SHUFFLE = "playback_session_shuffle"
         const val KEY_SESSION_REPEAT_MODE = "playback_session_repeat_mode"
+        const val KEY_MINI_STREAMING_TRACK_MAP_JSON = "mini_streaming_installed_track_map_json"
     }
 }
 
 private const val DEFAULT_ACCENT_HEX = "#E6BE00"
+private const val MINI_STREAMING_PLAYBACK_PREFIX = "mini-streaming:"
+private const val MINI_STREAMING_SEARCH_DEBOUNCE_MS = 280L
+private const val MINI_STREAMING_TRACKS_SEARCH_LIMIT = 8
+private const val MINI_STREAMING_ARTISTS_SEARCH_LIMIT = 10
+private const val MINI_STREAMING_ARTIST_PAGE_SIZE = 60
 private val TrackGapSecondsOptions = listOf(0f, 0.5f, 1f, 1.5f, 2f, 3f, 5f, 8f)
 private val MaxStorageMbOptions = listOf(-1, 512, 1024, 2048, 3072, 4096, 6144, 8192)
 
@@ -496,11 +550,19 @@ private fun SonoraApp() {
     val githubProjectURL = remember { "https://github.com/femboypig/Sonora-Android" }
     val githubProjectLabel = remember { "femboypig/Sonora-Android" }
     val storageRootPath = remember(context) { formatStoragePathForAbout(context.filesDir.absolutePath) }
+    val miniStreamingClient = remember(context) {
+        MiniStreamingClient(
+            backendBaseUrl = BuildConfig.BACKEND_BASE_URL.ifBlank { "https://api.corebrew.ru" }
+        )
+    }
 
     var tracks by remember { mutableStateOf(trackStore.loadTracks()) }
     var userPlaylists by remember { mutableStateOf(playlistStore.loadPlaylists()) }
     var appSettings by remember { mutableStateOf(settingsStore.load()) }
     var storageUsageBytes by remember { mutableLongStateOf(0L) }
+    var miniStreamingInstalledTrackMap by remember {
+        mutableStateOf(settingsStore.loadMiniStreamingInstalledTrackMap())
+    }
 
     var selectedTab by rememberSaveable { mutableStateOf(SonoraTab.Home) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
@@ -534,6 +596,28 @@ private fun SonoraApp() {
     var homeVisitCount by rememberSaveable { mutableIntStateOf(1) }
     var wasHomeSelected by rememberSaveable { mutableStateOf(true) }
     var lastPresentedHomeHeroTrackID by rememberSaveable { mutableStateOf<String?>(null) }
+    var miniStreamingTracks by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
+    var miniStreamingArtists by remember { mutableStateOf<List<MiniStreamingArtist>>(emptyList()) }
+    var miniStreamingTracksLoading by remember { mutableStateOf(false) }
+    var miniStreamingArtistsLoading by remember { mutableStateOf(false) }
+    var miniStreamingSearchToken by remember { mutableIntStateOf(0) }
+    var miniStreamingResolvingTrackIds by remember { mutableStateOf(setOf<String>()) }
+    var miniStreamingInstallingTrackIds by remember { mutableStateOf(setOf<String>()) }
+    val miniStreamingInstallingJobs = remember { mutableMapOf<String, Job>() }
+    val miniStreamingResolvingJobs = remember { mutableMapOf<String, Job>() }
+    var miniStreamingPlaybackQueue by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
+    var miniStreamingActiveTrackId by rememberSaveable { mutableStateOf<String?>(null) }
+    var miniStreamingResolvedPayloadByTrackId by remember {
+        mutableStateOf<Map<String, MiniStreamingDownloadPayload>>(emptyMap())
+    }
+    var miniStreamingPendingTrack by remember { mutableStateOf<TrackItem?>(null) }
+    var openedMiniStreamingArtist by remember { mutableStateOf<MiniStreamingArtist?>(null) }
+    var openedMiniStreamingArtistTracks by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
+    var openedMiniStreamingArtistLoading by remember { mutableStateOf(false) }
+    var openedMiniStreamingArtistLoadingMore by remember { mutableStateOf(false) }
+    var openedMiniStreamingArtistHasMore by remember { mutableStateOf(false) }
+    var openedMiniStreamingArtistRequestedLimit by remember { mutableIntStateOf(MINI_STREAMING_ARTIST_PAGE_SIZE) }
+    var openedMiniStreamingArtistRequestToken by remember { mutableIntStateOf(0) }
 
     var analyticsVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
@@ -551,6 +635,27 @@ private fun SonoraApp() {
             onTrackSkipped = { trackID ->
                 analyticsStore.recordSkip(trackID)
                 analyticsVersion += 1
+                val normalizedPlaybackId = trackID.trim()
+                val miniTrackId = when {
+                    normalizedPlaybackId.startsWith(MINI_STREAMING_PLAYBACK_PREFIX) -> {
+                        normalizedPlaybackId.removePrefix(MINI_STREAMING_PLAYBACK_PREFIX).trim().ifBlank { null }
+                    }
+                    normalizedPlaybackId.isNotBlank() -> {
+                        miniStreamingInstalledTrackMap.entries.firstOrNull { it.value == normalizedPlaybackId }?.key
+                    }
+                    else -> null
+                }
+                if (!miniTrackId.isNullOrBlank()) {
+                    miniStreamingResolvingJobs[miniTrackId]?.cancel()
+                    miniStreamingResolvingJobs.remove(miniTrackId)
+                    miniStreamingResolvingTrackIds = miniStreamingResolvingTrackIds - miniTrackId
+                    miniStreamingInstallingJobs[miniTrackId]?.cancel()
+                    miniStreamingInstallingJobs.remove(miniTrackId)
+                    miniStreamingInstallingTrackIds = miniStreamingInstallingTrackIds - miniTrackId
+                    if (miniStreamingActiveTrackId == miniTrackId) {
+                        miniStreamingActiveTrackId = null
+                    }
+                }
             }
         )
     }
@@ -671,6 +776,12 @@ private fun SonoraApp() {
         showSettingsPage = false
         showFavoritesPage = false
         showPlaylistsListPage = false
+        openedMiniStreamingArtist = null
+        openedMiniStreamingArtistTracks = emptyList()
+        openedMiniStreamingArtistLoading = false
+        openedMiniStreamingArtistLoadingMore = false
+        openedMiniStreamingArtistHasMore = false
+        openedMiniStreamingArtistRequestedLimit = MINI_STREAMING_ARTIST_PAGE_SIZE
     }
 
     LaunchedEffect(
@@ -691,15 +802,35 @@ private fun SonoraApp() {
         }
     }
 
-    LaunchedEffect(playbackController.currentTrackId) {
-        if (playbackController.currentTrackId == null) {
+    LaunchedEffect(playbackController.currentTrackId, miniStreamingPendingTrack?.id) {
+        val currentPlaybackId = playbackController.currentTrackId
+        if (currentPlaybackId != null) {
+            val pending = miniStreamingPendingTrack
+            if (pending != null && pending.id == currentPlaybackId) {
+                miniStreamingPendingTrack = null
+            }
+            val miniStreamingTrackId = if (currentPlaybackId.startsWith(MINI_STREAMING_PLAYBACK_PREFIX)) {
+                currentPlaybackId.removePrefix(MINI_STREAMING_PLAYBACK_PREFIX).trim().ifBlank { null }
+            } else {
+                miniStreamingInstalledTrackMap.entries
+                    .firstOrNull { (_, localTrackId) -> localTrackId == currentPlaybackId }
+                    ?.key
+            }
+            if (!miniStreamingTrackId.isNullOrBlank()) {
+                miniStreamingActiveTrackId = miniStreamingTrackId
+            }
+            return@LaunchedEffect
+        }
+        if (miniStreamingPendingTrack == null) {
             playerVisible = false
+            miniStreamingActiveTrackId = null
         }
     }
 
     val nestedScrollConnection = remember(
         openedPlaylistID,
         openedHomeAlbumArtistKey,
+        openedMiniStreamingArtist?.artistId,
         selectedTab,
         showMusicPage,
         showFavoritesPage,
@@ -724,7 +855,9 @@ private fun SonoraApp() {
                     return Offset.Zero
                 }
 
-                val inPlaylistDetail = openedPlaylistID != null || openedHomeAlbumArtistKey != null
+                val inPlaylistDetail = openedPlaylistID != null ||
+                    openedHomeAlbumArtistKey != null ||
+                    openedMiniStreamingArtist != null
                 if (selectedTab == SonoraTab.Home) {
                     if (showSearch) {
                         showSearch = false
@@ -978,30 +1111,61 @@ private fun SonoraApp() {
     val myMusicFiltered = remember(tracks, myMusicQuery) {
         tracks.filter { it.matchesQuery(myMusicQuery) }
     }
-    val searchPlaylistsFiltered = remember(allPlaylists, searchQuery) {
-        val normalized = searchQuery.trim().lowercase()
-        if (normalized.isBlank()) {
-            allPlaylists.take(8)
-        } else {
-            allPlaylists.filter { playlist ->
-                playlist.name.lowercase().contains(normalized)
-            }.take(8)
+    val localSearchPlaylistsFiltered by produceState(
+        initialValue = emptyList<PlaylistUiItem>(),
+        allPlaylists,
+        searchQuery
+    ) {
+        val playlistsSnapshot = allPlaylists
+        val querySnapshot = searchQuery
+        value = withContext(Dispatchers.Default) {
+            val normalized = querySnapshot.trim().lowercase()
+            if (normalized.isBlank()) {
+                playlistsSnapshot.take(8)
+            } else {
+                playlistsSnapshot.filter { playlist ->
+                    playlist.name.lowercase().contains(normalized)
+                }.take(8)
+            }
         }
     }
-    val searchArtistsFiltered = remember(tracks, searchQuery) {
-        buildSearchArtistItems(
-            tracks = tracks,
-            query = searchQuery,
-            limit = 12
-        )
-    }
-    val searchTracksForSearch = remember(tracks, searchQuery) {
-        val directMatches = tracks.filter { it.matchesQuery(searchQuery) }
-        if (searchQuery.trim().isBlank()) {
-            tracks.take(36)
-        } else {
-            directMatches
+    val localSearchArtistsFiltered by produceState(
+        initialValue = emptyList<SearchArtistUiItem>(),
+        tracks,
+        searchQuery
+    ) {
+        val tracksSnapshot = tracks
+        val querySnapshot = searchQuery
+        value = withContext(Dispatchers.Default) {
+            buildSearchArtistItems(
+                tracks = tracksSnapshot,
+                query = querySnapshot,
+                limit = 12
+            )
         }
+    }
+    val localSearchTracksForSearch by produceState(
+        initialValue = emptyList<TrackItem>(),
+        tracks,
+        searchQuery
+    ) {
+        val tracksSnapshot = tracks
+        val querySnapshot = searchQuery
+        value = withContext(Dispatchers.Default) {
+            val directMatches = tracksSnapshot.filter { it.matchesQuery(querySnapshot) }
+            if (querySnapshot.trim().isBlank()) {
+                tracksSnapshot.take(24)
+            } else {
+                directMatches.take(24)
+            }
+        }
+    }
+    val onlineSearchTracksForSearch = miniStreamingTracks
+    val onlineSearchArtistsForSearch = miniStreamingArtists
+    val miniStreamingQueuePositions = remember(miniStreamingPlaybackQueue) {
+        miniStreamingPlaybackQueue
+            .mapIndexed { index, track -> track.trackId to (index + 1) }
+            .toMap()
     }
     val playlistsFiltered = remember(allPlaylists, playlistsQuery) {
         val query = playlistsQuery.trim().lowercase()
@@ -1063,6 +1227,163 @@ private fun SonoraApp() {
         userPlaylists = playlistStore.loadPlaylists()
     }
 
+    fun miniStreamingPlaybackIdForTrack(trackId: String): String {
+        return "$MINI_STREAMING_PLAYBACK_PREFIX${trackId.trim()}"
+    }
+
+    fun miniStreamingTrackIdFromPlaybackId(playbackId: String?): String? {
+        val normalized = playbackId?.trim().orEmpty()
+        if (normalized.startsWith(MINI_STREAMING_PLAYBACK_PREFIX)) {
+            val trackId = normalized.removePrefix(MINI_STREAMING_PLAYBACK_PREFIX).trim()
+            if (trackId.isNotBlank()) {
+                return trackId
+            }
+        }
+        if (normalized.isNotBlank()) {
+            miniStreamingInstalledTrackMap.entries.firstOrNull { it.value == normalized }?.let { return it.key }
+        }
+        return null
+    }
+
+    fun normalizedMiniStreamingMeta(value: String): String {
+        return value
+            .trim()
+            .lowercase()
+            .replace(Regex("\\s+"), " ")
+    }
+
+    fun miniStreamingArtistTokens(value: String): List<String> {
+        val normalized = normalizedMiniStreamingMeta(value)
+        if (normalized.isBlank()) {
+            return emptyList()
+        }
+        return normalized
+            .split(",", "/", "&", ";", "|")
+            .map { it.trim() }
+            .filter { it.length > 1 }
+            .distinct()
+    }
+
+    fun isStrictMiniStreamingMetadataMatch(track: MiniStreamingTrack, item: TrackItem): Boolean {
+        val normalizedTitle = normalizedMiniStreamingMeta(track.title)
+        val normalizedArtist = normalizedMiniStreamingMeta(track.artists)
+        val itemTitle = normalizedMiniStreamingMeta(item.title)
+        val itemArtist = normalizedMiniStreamingMeta(item.artist)
+        if (normalizedTitle.isBlank() || itemTitle.isBlank() || normalizedTitle != itemTitle) {
+            return false
+        }
+        if (normalizedArtist.isBlank() || itemArtist.isBlank()) {
+            return false
+        }
+        if (itemArtist.contains(normalizedArtist) || normalizedArtist.contains(itemArtist)) {
+            if (track.durationMs > 0L && item.durationMs > 0L) {
+                return kotlin.math.abs(track.durationMs - item.durationMs) <= 3_000L
+            }
+            return true
+        }
+        val artistTokens = miniStreamingArtistTokens(track.artists)
+        if (!artistTokens.any { token -> itemArtist.contains(token) }) {
+            return false
+        }
+        if (track.durationMs > 0L && item.durationMs > 0L) {
+            return kotlin.math.abs(track.durationMs - item.durationMs) <= 3_000L
+        }
+        return true
+    }
+
+    fun knownInstalledMiniStreamingTrack(track: MiniStreamingTrack): TrackItem? {
+        val mappedLocalTrackId = miniStreamingInstalledTrackMap[track.trackId]
+        if (!mappedLocalTrackId.isNullOrBlank()) {
+            val mapped = trackByID[mappedLocalTrackId]
+            if (mapped != null && isStrictMiniStreamingMetadataMatch(track, mapped)) {
+                return mapped
+            }
+            val cleaned = miniStreamingInstalledTrackMap - track.trackId
+            miniStreamingInstalledTrackMap = cleaned
+            settingsStore.saveMiniStreamingInstalledTrackMap(cleaned)
+        }
+
+        val normalizedTitle = normalizedMiniStreamingMeta(track.title)
+        if (normalizedTitle.isBlank()) {
+            return null
+        }
+        val fallback = tracks.firstOrNull { item ->
+            isStrictMiniStreamingMetadataMatch(track, item)
+        } ?: return null
+
+        val updatedMap = miniStreamingInstalledTrackMap + (track.trackId to fallback.id)
+        miniStreamingInstalledTrackMap = updatedMap
+        settingsStore.saveMiniStreamingInstalledTrackMap(updatedMap)
+        return fallback
+    }
+
+    fun rememberInstalledMiniStreamingTrack(trackId: String, localTrackId: String) {
+        if (trackId.isBlank() || localTrackId.isBlank()) {
+            return
+        }
+        val updatedMap = miniStreamingInstalledTrackMap + (trackId to localTrackId)
+        miniStreamingInstalledTrackMap = updatedMap
+        settingsStore.saveMiniStreamingInstalledTrackMap(updatedMap)
+    }
+
+    fun miniStreamingPlaybackTrackFor(
+        track: MiniStreamingTrack,
+        payload: MiniStreamingDownloadPayload?
+    ): TrackItem? {
+        val installed = knownInstalledMiniStreamingTrack(track)
+        if (installed != null) {
+            return TrackItem(
+                id = miniStreamingPlaybackIdForTrack(track.trackId),
+                title = installed.title.ifBlank { track.title.ifBlank { "Track" } },
+                artist = installed.artist.ifBlank { track.artists.ifBlank { "Spotify" } },
+                durationMs = if (installed.durationMs > 0L) installed.durationMs else track.durationMs,
+                filePath = installed.filePath,
+                artworkPath = installed.artworkPath ?: track.artworkUrl.ifBlank { payload?.artworkUrl.orEmpty() },
+                addedAt = installed.addedAt,
+                isFavorite = installed.isFavorite
+            )
+        }
+
+        val source = payload?.mediaUrl?.trim().orEmpty()
+        if (source.isBlank()) {
+            return null
+        }
+
+        return TrackItem(
+            id = miniStreamingPlaybackIdForTrack(track.trackId),
+            title = track.title.ifBlank { payload?.title?.ifBlank { "Track" } ?: "Track" },
+            artist = track.artists.ifBlank { payload?.artist?.ifBlank { "Spotify" } ?: "Spotify" },
+            durationMs = when {
+                track.durationMs > 0L -> track.durationMs
+                payload != null && payload.durationMs > 0L -> payload.durationMs
+                else -> 0L
+            },
+            filePath = source,
+            artworkPath = track.artworkUrl.ifBlank { payload?.artworkUrl.orEmpty() },
+            addedAt = System.currentTimeMillis(),
+            isFavorite = false
+        )
+    }
+
+    fun buildMiniStreamingPlaybackQueue(queue: List<MiniStreamingTrack>): List<TrackItem> {
+        return queue.mapNotNull { miniTrack ->
+            miniStreamingPlaybackTrackFor(
+                track = miniTrack,
+                payload = miniStreamingResolvedPayloadByTrackId[miniTrack.trackId]
+            )
+        }
+    }
+
+    LaunchedEffect(trackByID, miniStreamingInstalledTrackMap) {
+        val sanitized = miniStreamingInstalledTrackMap.filterValues { localTrackId ->
+            trackByID.containsKey(localTrackId)
+        }
+        if (sanitized != miniStreamingInstalledTrackMap) {
+            miniStreamingInstalledTrackMap = sanitized
+            settingsStore.saveMiniStreamingInstalledTrackMap(sanitized)
+        }
+    }
+
     LaunchedEffect(selectedTab) {
         if (selectedTab == SonoraTab.Home) {
             if (!wasHomeSelected) {
@@ -1081,10 +1402,411 @@ private fun SonoraApp() {
         }
     }
 
+    LaunchedEffect(
+        selectedTab,
+        showMusicPage,
+        showFavoritesPage,
+        showPlaylistsListPage,
+        openedPlaylistID,
+        openedHomeAlbumArtistKey,
+        openedMiniStreamingArtist?.artistId
+    ) {
+        val isSearchRoot = selectedTab == SonoraTab.Music &&
+            !showMusicPage &&
+            !showFavoritesPage &&
+            !showPlaylistsListPage &&
+            openedPlaylistID == null &&
+            openedHomeAlbumArtistKey == null &&
+            openedMiniStreamingArtist == null
+        if (!isSearchRoot) {
+            miniStreamingTracksLoading = false
+            miniStreamingArtistsLoading = false
+            miniStreamingTracks = emptyList()
+            miniStreamingArtists = emptyList()
+            return@LaunchedEffect
+        }
+        snapshotFlow { searchQuery.trim() }
+            .collectLatest { normalizedQuery ->
+                delay(MINI_STREAMING_SEARCH_DEBOUNCE_MS)
+
+                if (!miniStreamingClient.isConfigured()) {
+                    miniStreamingTracksLoading = false
+                    miniStreamingArtistsLoading = false
+                    miniStreamingTracks = emptyList()
+                    miniStreamingArtists = emptyList()
+                    return@collectLatest
+                }
+
+                if (normalizedQuery.isBlank()) {
+                    miniStreamingTracksLoading = false
+                    miniStreamingArtistsLoading = false
+                    miniStreamingTracks = emptyList()
+                    miniStreamingArtists = emptyList()
+                    return@collectLatest
+                }
+
+                miniStreamingTracksLoading = true
+                miniStreamingArtistsLoading = true
+
+                val (resolvedTracks, resolvedArtists) = kotlinx.coroutines.coroutineScope {
+                    val tracksDeferred = async(Dispatchers.IO) {
+                        miniStreamingClient.searchTracks(normalizedQuery, limit = MINI_STREAMING_TRACKS_SEARCH_LIMIT)
+                    }
+                    val artistsDeferred = async(Dispatchers.IO) {
+                        miniStreamingClient.searchArtists(normalizedQuery, limit = MINI_STREAMING_ARTISTS_SEARCH_LIMIT)
+                    }
+                    tracksDeferred.await() to artistsDeferred.await()
+                }
+
+                miniStreamingTracks = resolvedTracks
+                miniStreamingArtists = resolvedArtists
+                miniStreamingTracksLoading = false
+                miniStreamingArtistsLoading = false
+            }
+    }
+
+    LaunchedEffect(openedMiniStreamingArtist?.artistId) {
+        openedMiniStreamingArtistTracks = emptyList()
+        openedMiniStreamingArtistLoading = false
+        openedMiniStreamingArtistLoadingMore = false
+        openedMiniStreamingArtistHasMore = false
+        openedMiniStreamingArtistRequestedLimit = MINI_STREAMING_ARTIST_PAGE_SIZE
+    }
+
+    LaunchedEffect(openedMiniStreamingArtist?.artistId, openedMiniStreamingArtistRequestedLimit) {
+        val openedArtist = openedMiniStreamingArtist ?: return@LaunchedEffect
+        if (!miniStreamingClient.isConfigured()) {
+            openedMiniStreamingArtistTracks = emptyList()
+            openedMiniStreamingArtistLoading = false
+            openedMiniStreamingArtistLoadingMore = false
+            openedMiniStreamingArtistHasMore = false
+            return@LaunchedEffect
+        }
+
+        openedMiniStreamingArtistRequestToken += 1
+        val requestToken = openedMiniStreamingArtistRequestToken
+        val requestedLimit = openedMiniStreamingArtistRequestedLimit.coerceAtLeast(MINI_STREAMING_ARTIST_PAGE_SIZE)
+        val firstLoad = openedMiniStreamingArtistTracks.isEmpty()
+
+        if (firstLoad) {
+            openedMiniStreamingArtistLoading = true
+            openedMiniStreamingArtistLoadingMore = false
+        } else {
+            openedMiniStreamingArtistLoadingMore = true
+        }
+
+        val resolved = withContext(Dispatchers.IO) {
+            miniStreamingClient.fetchTopTracksForArtist(openedArtist.artistId, limit = requestedLimit)
+        }
+        if (requestToken != openedMiniStreamingArtistRequestToken) {
+            return@LaunchedEffect
+        }
+
+        openedMiniStreamingArtistTracks = resolved
+        openedMiniStreamingArtistHasMore = resolved.size >= requestedLimit && resolved.isNotEmpty()
+        openedMiniStreamingArtistLoading = false
+        openedMiniStreamingArtistLoadingMore = false
+    }
+
     fun persistTracks(updated: List<TrackItem>) {
         tracks = updated
         scope.launch(Dispatchers.IO) {
             trackStore.saveTracks(updated)
+        }
+    }
+
+    fun refreshMiniStreamingQueueInPlayer() {
+        val refreshedQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
+        if (refreshedQueue.isEmpty()) {
+            return
+        }
+        playbackController.replaceQueuePreservingCurrent(refreshedQueue)
+    }
+
+    fun requestMoreOpenedMiniStreamingArtistTracks() {
+        if (openedMiniStreamingArtist == null) {
+            return
+        }
+        if (openedMiniStreamingArtistLoading || openedMiniStreamingArtistLoadingMore || !openedMiniStreamingArtistHasMore) {
+            return
+        }
+        openedMiniStreamingArtistRequestedLimit += MINI_STREAMING_ARTIST_PAGE_SIZE
+    }
+
+    fun launchMiniStreamingResolve(
+        track: MiniStreamingTrack,
+        onResolved: (MiniStreamingDownloadPayload) -> Unit = {},
+        onFailure: () -> Unit = {}
+    ) {
+        if (track.trackId.isBlank()) {
+            onFailure()
+            return
+        }
+        val cachedPayload = miniStreamingResolvedPayloadByTrackId[track.trackId]
+        if (cachedPayload != null) {
+            onResolved(cachedPayload)
+            return
+        }
+        if (miniStreamingResolvingTrackIds.contains(track.trackId)) {
+            return
+        }
+        miniStreamingResolvingTrackIds = miniStreamingResolvingTrackIds + track.trackId
+        val resolvingJob = scope.launch {
+            val payload = withContext(Dispatchers.IO) {
+                miniStreamingClient.resolveDownload(track.trackId)
+            }
+            if (payload == null) {
+                onFailure()
+                return@launch
+            }
+            miniStreamingResolvedPayloadByTrackId =
+                miniStreamingResolvedPayloadByTrackId + (track.trackId to payload)
+            refreshMiniStreamingQueueInPlayer()
+            onResolved(payload)
+        }
+        miniStreamingResolvingJobs[track.trackId] = resolvingJob
+        resolvingJob.invokeOnCompletion {
+            miniStreamingResolvingJobs.remove(track.trackId)
+            miniStreamingResolvingTrackIds = miniStreamingResolvingTrackIds - track.trackId
+        }
+        }
+
+    fun prefetchMiniStreamingQueuePayloads(
+        queue: List<MiniStreamingTrack>,
+        startIndexExclusive: Int,
+        maxCount: Int = 12
+    ) {
+        // Disabled on purpose:
+        // resolve/download must happen only for the track explicitly opened by user,
+        // without background prefetch of next queue items.
+        return
+    }
+
+    fun sanitizeMiniStreamingExtension(extension: String): String {
+        val normalized = extension.trim().lowercase().replace(Regex("[^a-z0-9]"), "")
+        return normalized.ifBlank { "mp3" }
+    }
+
+    fun consumeMiniStreamingResolveFailureMessage(fallback: String): String {
+        val resolved = miniStreamingClient.consumeLastResolveFailureMessage()?.trim().orEmpty()
+        return if (resolved.isNotBlank()) resolved else fallback
+    }
+
+    suspend fun installMiniStreamingTrackToLibrary(
+        track: MiniStreamingTrack,
+        payload: MiniStreamingDownloadPayload
+    ): TrackItem? {
+        val existing = knownInstalledMiniStreamingTrack(track)
+        if (existing != null) {
+            return existing
+        }
+
+        val extension = sanitizeMiniStreamingExtension(payload.extension)
+        val libraryDir = File(context.filesDir, "Sonora/mini_streaming").apply { mkdirs() }
+        val destination = File(libraryDir, "${track.trackId}.$extension")
+        val downloadOk = withContext(Dispatchers.IO) {
+            if (destination.exists() && destination.length() > 0L) {
+                true
+            } else {
+                miniStreamingClient.downloadToFile(payload.mediaUrl, destination)
+            }
+        }
+        if (!downloadOk || !destination.exists() || destination.length() <= 0L) {
+            return null
+        }
+
+        val alreadyInstalled = knownInstalledMiniStreamingTrack(track)
+        if (alreadyInstalled != null) {
+            return alreadyInstalled
+        }
+
+        val newTrack = TrackItem(
+            id = UUID.randomUUID().toString(),
+            title = track.title.ifBlank { payload.title.ifBlank { "Track" } },
+            artist = track.artists.ifBlank { payload.artist.ifBlank { "Spotify" } },
+            durationMs = when {
+                track.durationMs > 0L -> track.durationMs
+                payload.durationMs > 0L -> payload.durationMs
+                else -> 0L
+            },
+            filePath = destination.absolutePath,
+            artworkPath = track.artworkUrl.ifBlank { payload.artworkUrl },
+            addedAt = System.currentTimeMillis(),
+            isFavorite = false
+        )
+
+        val deduped = tracks.filterNot { item ->
+            item.filePath == destination.absolutePath ||
+                (item.title.equals(newTrack.title, ignoreCase = true) &&
+                    item.artist.equals(newTrack.artist, ignoreCase = true))
+        }
+        val updated = listOf(newTrack) + deduped
+        persistTracks(updated)
+        rememberInstalledMiniStreamingTrack(track.trackId, newTrack.id)
+        refreshMiniStreamingQueueInPlayer()
+        return newTrack
+    }
+
+    fun launchMiniStreamingInstall(
+        track: MiniStreamingTrack,
+        initialPayload: MiniStreamingDownloadPayload? = null,
+        showErrorMessage: Boolean
+    ) {
+        if (track.trackId.isBlank()) {
+            return
+        }
+        if (knownInstalledMiniStreamingTrack(track) != null) {
+            return
+        }
+        if (miniStreamingInstallingTrackIds.contains(track.trackId)) {
+            return
+        }
+        miniStreamingInstallingTrackIds = miniStreamingInstallingTrackIds + track.trackId
+
+        val installJob = scope.launch {
+            val payload = initialPayload
+                ?: miniStreamingResolvedPayloadByTrackId[track.trackId]
+                ?: withContext(Dispatchers.IO) {
+                    miniStreamingClient.resolveDownload(track.trackId)
+                }
+
+            if (payload == null) {
+                if (showErrorMessage) {
+                    snackbarHostState.showSnackbar(
+                        consumeMiniStreamingResolveFailureMessage("Install failed for ${track.title}")
+                    )
+                }
+                return@launch
+            }
+
+            miniStreamingResolvedPayloadByTrackId = miniStreamingResolvedPayloadByTrackId + (track.trackId to payload)
+            refreshMiniStreamingQueueInPlayer()
+
+            val installed = installMiniStreamingTrackToLibrary(track, payload)
+            if (installed == null && showErrorMessage) {
+                snackbarHostState.showSnackbar("Install failed for ${track.title}")
+            }
+        }
+        miniStreamingInstallingJobs[track.trackId] = installJob
+        installJob.invokeOnCompletion {
+            miniStreamingInstallingTrackIds = miniStreamingInstallingTrackIds - track.trackId
+            miniStreamingInstallingJobs.remove(track.trackId)
+        }
+    }
+
+    fun playMiniStreamingTrack(
+        track: MiniStreamingTrack,
+        queue: List<MiniStreamingTrack>,
+        startIndex: Int
+    ) {
+        if (track.trackId.isBlank()) {
+            return
+        }
+        val targetPlaybackId = miniStreamingPlaybackIdForTrack(track.trackId)
+        if (playbackController.currentTrackId == targetPlaybackId && playbackController.queueCount > 0) {
+            playbackController.togglePlayPause()
+            playerVisible = true
+            return
+        }
+        if (miniStreamingInstallingTrackIds.contains(track.trackId) ||
+            miniStreamingResolvingTrackIds.contains(track.trackId)
+        ) {
+            return
+        }
+
+        val playbackSeedQueue = if (queue.isEmpty()) listOf(track) else queue
+        val queueTrackIndex = playbackSeedQueue.indexOfFirst { it.trackId == track.trackId }
+        val normalizedStartIndex = if (queueTrackIndex >= 0) {
+            queueTrackIndex
+        } else {
+            startIndex.coerceIn(0, (playbackSeedQueue.size - 1).coerceAtLeast(0))
+        }
+
+        miniStreamingActiveTrackId = track.trackId
+        miniStreamingPlaybackQueue = playbackSeedQueue
+        miniStreamingPendingTrack = TrackItem(
+            id = targetPlaybackId,
+            title = track.title.ifBlank { "Track" },
+            artist = track.artists.ifBlank { "Spotify" },
+            durationMs = track.durationMs,
+            filePath = "",
+            artworkPath = track.artworkUrl,
+            addedAt = System.currentTimeMillis(),
+            isFavorite = false
+        )
+        playerVisible = true
+        playbackController.stop()
+
+        val installed = knownInstalledMiniStreamingTrack(track)
+        if (installed != null) {
+                val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
+                if (playbackQueue.any { it.id == targetPlaybackId }) {
+                    playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
+                    miniStreamingPendingTrack = null
+                    prefetchMiniStreamingQueuePayloads(
+                        queue = miniStreamingPlaybackQueue,
+                        startIndexExclusive = normalizedStartIndex + 1
+                    )
+                }
+            return
+        }
+
+        launchMiniStreamingResolve(
+            track = track,
+            onResolved = { payload ->
+                val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
+                if (playbackQueue.any { it.id == targetPlaybackId }) {
+                    playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
+                    miniStreamingPendingTrack = null
+                    scope.launch {
+                        delay(1000L)
+                        val currentMiniTrackId = miniStreamingTrackIdFromPlaybackId(playbackController.currentTrackId)
+                        if (currentMiniTrackId != null && currentMiniTrackId != track.trackId) {
+                            return@launch
+                        }
+                        launchMiniStreamingInstall(
+                            track = track,
+                            initialPayload = payload,
+                            showErrorMessage = false
+                        )
+                    }
+                    prefetchMiniStreamingQueuePayloads(
+                        queue = miniStreamingPlaybackQueue,
+                        startIndexExclusive = normalizedStartIndex + 1
+                    )
+                } else {
+                    miniStreamingPendingTrack = null
+                    miniStreamingActiveTrackId = null
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Cannot start ${track.title}")
+                    }
+                }
+            },
+            onFailure = {
+                miniStreamingPendingTrack = null
+                miniStreamingActiveTrackId = null
+                scope.launch {
+                    snackbarHostState.showSnackbar(
+                        consumeMiniStreamingResolveFailureMessage("Cannot open ${track.title}")
+                    )
+                }
+            }
+        )
+    }
+
+    LaunchedEffect(
+        playbackController.currentTrackId,
+        miniStreamingPlaybackQueue,
+        miniStreamingResolvedPayloadByTrackId
+    ) {
+        val currentMiniTrackId = miniStreamingTrackIdFromPlaybackId(playbackController.currentTrackId)
+            ?: return@LaunchedEffect
+        val currentIndex = miniStreamingPlaybackQueue.indexOfFirst { it.trackId == currentMiniTrackId }
+        if (currentIndex >= 0) {
+            prefetchMiniStreamingQueuePayloads(
+                queue = miniStreamingPlaybackQueue,
+                startIndexExclusive = currentIndex + 1
+            )
         }
     }
 
@@ -1103,6 +1825,13 @@ private fun SonoraApp() {
         val target = tracks.firstOrNull { it.id == trackID } ?: return
         val updated = tracks.filterNot { it.id == trackID }
         persistTracks(updated)
+        val cleanedMap = miniStreamingInstalledTrackMap.filterValues { localTrackID ->
+            localTrackID != trackID
+        }
+        if (cleanedMap != miniStreamingInstalledTrackMap) {
+            miniStreamingInstalledTrackMap = cleanedMap
+            settingsStore.saveMiniStreamingInstalledTrackMap(cleanedMap)
+        }
         playlistStore.removeTrackIdFromAllPlaylists(trackID)
         reloadPlaylists()
         if (playbackController.currentTrackId == trackID) {
@@ -1295,7 +2024,8 @@ private fun SonoraApp() {
     val inOverlayScreen = isCreateNameScreen || isCreateTracksScreen || isAddTracksScreen
     val inSubPage = showHistoryPage || showSettingsPage || showFavoritesPage || showPlaylistsListPage || showMusicPage
 
-    val inPlaylistDetail = openedDetailPlaylist != null
+    val inMiniStreamingArtistDetail = openedMiniStreamingArtist != null
+    val inPlaylistDetail = openedDetailPlaylist != null || inMiniStreamingArtistDetail
     val isRootSearchPage = (selectedTab == SonoraTab.Music) && !inSubPage && !inPlaylistDetail
     val showCompactPlaylistTitle = inPlaylistDetail && (
         playlistDetailListState.firstVisibleItemIndex > 0 ||
@@ -1325,7 +2055,7 @@ private fun SonoraApp() {
         }
     }
 
-    val miniPlayerTrack = playbackController.currentTrack
+    val miniPlayerTrack = playbackController.currentTrack ?: miniStreamingPendingTrack
     val miniPlayerVisible = !inPlaylistDetail &&
         !inOverlayScreen &&
         !inSubPage &&
@@ -1335,6 +2065,11 @@ private fun SonoraApp() {
 
     val title = when {
         isTrackSelectionMode -> "$selectedTrackCount Selected"
+        inMiniStreamingArtistDetail -> if (showCompactPlaylistTitle) {
+            openedMiniStreamingArtist?.name ?: "Artist"
+        } else {
+            ""
+        }
         inPlaylistDetail -> if (showCompactPlaylistTitle) (openedDetailPlaylist?.name ?: "Playlist") else ""
         showHistoryPage -> "History"
         showSettingsPage -> "Settings"
@@ -1705,7 +2440,11 @@ private fun SonoraApp() {
 
                         if (inPlaylistDetail && showCompactPlaylistTitle) {
                             Text(
-                                text = openedDetailPlaylist?.name ?: "Playlist",
+                                text = if (inMiniStreamingArtistDetail) {
+                                    openedMiniStreamingArtist?.name ?: "Artist"
+                                } else {
+                                    openedDetailPlaylist?.name ?: "Playlist"
+                                },
                                 modifier = Modifier.align(Alignment.Center),
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     fontSize = 17.sp,
@@ -1779,6 +2518,8 @@ private fun SonoraApp() {
                                         showPlaylistsListPage = false
                                         openedPlaylistID = null
                                         openedHomeAlbumArtistKey = null
+                                        openedMiniStreamingArtist = null
+                                        openedMiniStreamingArtistTracks = emptyList()
                                     },
                                     icon = {
                                         val iconSize = if (spec.tab == SonoraTab.Home) 22.dp else 20.dp
@@ -1911,97 +2652,153 @@ private fun SonoraApp() {
                         clearTrackSelection()
                         openedPlaylistID = null
                         openedHomeAlbumArtistKey = null
+                        openedMiniStreamingArtist = null
+                        openedMiniStreamingArtistTracks = emptyList()
                     }
                 ) {
-                    PlaylistDetailPage(
-                        listState = playlistDetailListState,
-                        playlist = openedDetailPlaylist,
-                        tracks = openedDetailTracks,
-                        canRemoveTracks = openedPlaylist?.isUser == true,
-                        currentTrackID = playbackController.currentTrackId,
-                        isPlaying = playbackController.isPlaying,
-                        isCurrentQueueMatching = playbackController.isQueueMatching(openedDetailTracks),
-                        isSleepTimerActive = playbackController.isSleepTimerActive,
-                        selectionMode = isTrackSelectionMode &&
-                            trackSelectionContext == TrackSelectionContext.PlaylistDetail,
-                        selectedTrackIDs = selectedTrackIDs,
-                        onTrackTap = { tapped ->
-                            if (isTrackSelectionMode &&
-                                trackSelectionContext == TrackSelectionContext.PlaylistDetail
-                            ) {
-                                toggleTrackSelection(
-                                    context = TrackSelectionContext.PlaylistDetail,
-                                    trackID = tapped.id
+                    val openedArtist = openedMiniStreamingArtist
+                    if (openedArtist != null) {
+                        val currentMiniStreamingTrackId =
+                            miniStreamingTrackIdFromPlaybackId(playbackController.currentTrackId)
+                        MiniStreamingArtistPage(
+                            listState = playlistDetailListState,
+                            artist = openedArtist,
+                            tracks = openedMiniStreamingArtistTracks,
+                            isLoading = openedMiniStreamingArtistLoading,
+                            currentTrackId = currentMiniStreamingTrackId,
+                            isPlaying = playbackController.isPlaying,
+                            isSleepTimerActive = playbackController.isSleepTimerActive,
+                            resolvingTrackIds = miniStreamingResolvingTrackIds,
+                            installingTrackIds = miniStreamingInstallingTrackIds,
+                            queuePositionsByTrackId = miniStreamingQueuePositions,
+                            canLoadMore = openedMiniStreamingArtistHasMore,
+                            isLoadingMore = openedMiniStreamingArtistLoadingMore,
+                            onPlayTap = {
+                                val firstTrack = openedMiniStreamingArtistTracks.firstOrNull()
+                                if (firstTrack != null) {
+                                    playMiniStreamingTrack(
+                                        track = firstTrack,
+                                        queue = openedMiniStreamingArtistTracks,
+                                        startIndex = 0
+                                    )
+                                }
+                            },
+                            onShuffleTap = {
+                                val shuffled = openedMiniStreamingArtistTracks.shuffled()
+                                val firstTrack = shuffled.firstOrNull()
+                                if (firstTrack != null) {
+                                    playMiniStreamingTrack(
+                                        track = firstTrack,
+                                        queue = shuffled,
+                                        startIndex = 0
+                                    )
+                                }
+                            },
+                            onSleepTap = {
+                                showSleepTimerDialog = true
+                            },
+                            onLoadMore = {
+                                requestMoreOpenedMiniStreamingArtistTracks()
+                            },
+                            onTrackTap = { tapped, index ->
+                                playMiniStreamingTrack(
+                                    track = tapped,
+                                    queue = openedMiniStreamingArtistTracks,
+                                    startIndex = index
                                 )
-                            } else {
-                                playbackController.playOrToggleFromQueue(
-                                    queue = openedDetailTracks,
-                                    targetTrackId = tapped.id
-                                )
-                                playerVisible = true
                             }
-                        },
-                        onHeaderPlayPauseTap = {
-                            if (openedDetailTracks.isNotEmpty()) {
-                                if (playbackController.isQueueMatching(openedDetailTracks) &&
-                                    playbackController.currentTrackId != null
+                        )
+                    } else {
+                        PlaylistDetailPage(
+                            listState = playlistDetailListState,
+                            playlist = openedDetailPlaylist,
+                            tracks = openedDetailTracks,
+                            canRemoveTracks = openedPlaylist?.isUser == true,
+                            currentTrackID = playbackController.currentTrackId,
+                            isPlaying = playbackController.isPlaying,
+                            isCurrentQueueMatching = playbackController.isQueueMatching(openedDetailTracks),
+                            isSleepTimerActive = playbackController.isSleepTimerActive,
+                            selectionMode = isTrackSelectionMode &&
+                                trackSelectionContext == TrackSelectionContext.PlaylistDetail,
+                            selectedTrackIDs = selectedTrackIDs,
+                            onTrackTap = { tapped ->
+                                if (isTrackSelectionMode &&
+                                    trackSelectionContext == TrackSelectionContext.PlaylistDetail
                                 ) {
-                                    playbackController.togglePlayPause()
+                                    toggleTrackSelection(
+                                        context = TrackSelectionContext.PlaylistDetail,
+                                        trackID = tapped.id
+                                    )
                                 } else {
                                     playbackController.playOrToggleFromQueue(
                                         queue = openedDetailTracks,
-                                        targetTrackId = openedDetailTracks.first().id
+                                        targetTrackId = tapped.id
                                     )
+                                    playerVisible = true
                                 }
-                            }
-                        },
-                        onHeaderShuffleTap = {
-                            if (openedDetailTracks.isNotEmpty()) {
-                                val randomTrack = openedDetailTracks.randomOrNull()
-                                if (randomTrack != null) {
-                                    playbackController.playOrToggleFromQueue(
-                                        queue = openedDetailTracks,
-                                        targetTrackId = randomTrack.id
-                                    )
-                                    if (!playbackController.isShuffleEnabled) {
-                                        playbackController.toggleShuffleEnabled()
+                            },
+                            onHeaderPlayPauseTap = {
+                                if (openedDetailTracks.isNotEmpty()) {
+                                    if (playbackController.isQueueMatching(openedDetailTracks) &&
+                                        playbackController.currentTrackId != null
+                                    ) {
+                                        playbackController.togglePlayPause()
+                                    } else {
+                                        playbackController.playOrToggleFromQueue(
+                                            queue = openedDetailTracks,
+                                            targetTrackId = openedDetailTracks.first().id
+                                        )
                                     }
                                 }
-                            }
-                        },
-                        onHeaderSleepTap = { showSleepTimerDialog = true },
-                        onTrackLongPress = { track ->
-                            if (openedDetailPlaylist?.isUser == true) {
-                                toggleTrackSelection(
-                                    context = TrackSelectionContext.PlaylistDetail,
-                                    trackID = track.id,
-                                    forceSelect = true
-                                )
-                            } else {
+                            },
+                            onHeaderShuffleTap = {
+                                if (openedDetailTracks.isNotEmpty()) {
+                                    val randomTrack = openedDetailTracks.randomOrNull()
+                                    if (randomTrack != null) {
+                                        playbackController.playOrToggleFromQueue(
+                                            queue = openedDetailTracks,
+                                            targetTrackId = randomTrack.id
+                                        )
+                                        if (!playbackController.isShuffleEnabled) {
+                                            playbackController.toggleShuffleEnabled()
+                                        }
+                                    }
+                                }
+                            },
+                            onHeaderSleepTap = { showSleepTimerDialog = true },
+                            onTrackLongPress = { track ->
+                                if (openedDetailPlaylist?.isUser == true) {
+                                    toggleTrackSelection(
+                                        context = TrackSelectionContext.PlaylistDetail,
+                                        trackID = track.id,
+                                        forceSelect = true
+                                    )
+                                } else {
+                                    onFavoriteToggle(track.id)
+                                    scope.launch {
+                                        snackbarHostState.showSnackbar("Favorite state updated")
+                                    }
+                                }
+                            },
+                            onTrackSwipeFavorite = { track ->
                                 onFavoriteToggle(track.id)
                                 scope.launch {
-                                    snackbarHostState.showSnackbar("Favorite state updated")
+                                    val message = if (track.isFavorite) {
+                                        "Removed from favorites"
+                                    } else {
+                                        "Added to favorites"
+                                    }
+                                    snackbarHostState.showSnackbar(message)
+                                }
+                            },
+                            onTrackSwipeRemove = { track ->
+                                removeTrackFromOpenedPlaylist(track.id)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar("Removed from playlist")
                                 }
                             }
-                        },
-                        onTrackSwipeFavorite = { track ->
-                            onFavoriteToggle(track.id)
-                            scope.launch {
-                                val message = if (track.isFavorite) {
-                                    "Removed from favorites"
-                                } else {
-                                    "Added to favorites"
-                                }
-                                snackbarHostState.showSnackbar(message)
-                            }
-                        },
-                        onTrackSwipeRemove = { track ->
-                            removeTrackFromOpenedPlaylist(track.id)
-                            scope.launch {
-                                snackbarHostState.showSnackbar("Removed from playlist")
-                            }
-                        }
-                    )
+                        )
+                    }
                 }
 
                 showHistoryPage -> SwipeDismissPage(onDismiss = { showHistoryPage = false }) {
@@ -2095,6 +2892,7 @@ private fun SonoraApp() {
                             showPlaylistsListPage = false
                             openedPlaylistID = playlist.id
                             openedHomeAlbumArtistKey = null
+                            openedMiniStreamingArtist = null
                         },
                         onCreatePlaylistTap = {
                             playlistCreateStep = PlaylistCreateStep.Name
@@ -2105,7 +2903,7 @@ private fun SonoraApp() {
                     )
                 }
 
-                tracks.isEmpty() -> FirstMusicOnboardingPage(
+                tracks.isEmpty() && selectedTab != SonoraTab.Music -> FirstMusicOnboardingPage(
                     onAddMusicTap = {
                         addMusicLauncher.launch(arrayOf("audio/*"))
                     }
@@ -2215,24 +3013,51 @@ private fun SonoraApp() {
                 selectedTab == SonoraTab.Music -> SearchPage(
                     listState = musicListState,
                     searchQuery = searchQuery,
-                    trackResults = searchTracksForSearch,
-                    playlistResults = searchPlaylistsFiltered,
-                    artistResults = searchArtistsFiltered,
+                    localPlaylistResults = localSearchPlaylistsFiltered,
+                    localArtistResults = localSearchArtistsFiltered,
+                    onlineTrackResults = onlineSearchTracksForSearch,
+                    onlineArtistResults = onlineSearchArtistsForSearch,
+                    musicResults = localSearchTracksForSearch,
+                    onlineTracksLoading = miniStreamingTracksLoading,
+                    onlineArtistsLoading = miniStreamingArtistsLoading,
+                    onlineConfigured = miniStreamingClient.isConfigured(),
+                    currentLocalTrackId = playbackController.currentTrackId
+                        ?.takeUnless { it.startsWith(MINI_STREAMING_PLAYBACK_PREFIX) },
+                    currentOnlineTrackId = miniStreamingTrackIdFromPlaybackId(playbackController.currentTrackId),
+                    isPlaying = playbackController.isPlaying,
+                    onlineResolvingTrackIds = miniStreamingResolvingTrackIds,
+                    onlineInstallingTrackIds = miniStreamingInstallingTrackIds,
+                    onlineQueuePositionsByTrackId = miniStreamingQueuePositions,
                     trackByID = trackByID,
                     bottomInset = listBottomInset,
-                    onTrackTap = { tapped ->
+                    onMusicTrackTap = { tapped ->
                         playbackController.playOrToggleFromQueue(
                             queue = tracks,
                             targetTrackId = tapped.id
                         )
                         playerVisible = true
                     },
-                    onPlaylistTap = { playlist ->
-                        openedPlaylistID = playlist.id
+                    onOnlineTrackTap = { tapped, index ->
+                        playMiniStreamingTrack(
+                            track = tapped,
+                            queue = onlineSearchTracksForSearch,
+                            startIndex = index
+                        )
                     },
-                    onArtistTap = { artist ->
+                    onLocalPlaylistTap = { playlist ->
+                        openedPlaylistID = playlist.id
+                        openedMiniStreamingArtist = null
+                        openedHomeAlbumArtistKey = null
+                    },
+                    onLocalArtistTap = { artist ->
                         searchQuery = artist.title
                         showSearch = true
+                    },
+                    onOnlineArtistTap = { artist ->
+                        openedMiniStreamingArtist = artist
+                        openedMiniStreamingArtistTracks = emptyList()
+                        openedPlaylistID = null
+                        openedHomeAlbumArtistKey = null
                     }
                 )
 
@@ -2259,6 +3084,7 @@ private fun SonoraApp() {
                     },
                     onPlaylistTap = { playlist ->
                         openedPlaylistID = playlist.id
+                        openedMiniStreamingArtist = null
                     },
                     onLastAddedTap = { tapped ->
                         playbackController.playOrToggleFromQueue(
@@ -2270,6 +3096,7 @@ private fun SonoraApp() {
                     onAlbumTap = { album ->
                         openedHomeAlbumArtistKey = album.artistKey
                         openedPlaylistID = null
+                        openedMiniStreamingArtist = null
                     },
                     onCreatePlaylistTap = {
                         playlistCreateStep = PlaylistCreateStep.Name
@@ -2353,6 +3180,64 @@ private fun SonoraApp() {
             }
 
             val activeMiniTrack = miniPlayerTrack
+            val visiblePlaybackId = playbackController.currentTrackId ?: miniStreamingPendingTrack?.id
+            val visibleMiniTrackId = miniStreamingTrackIdFromPlaybackId(visiblePlaybackId)
+            val visibleMiniTrackIndex = if (visibleMiniTrackId.isNullOrBlank()) {
+                -1
+            } else {
+                miniStreamingPlaybackQueue.indexOfFirst { it.trackId == visibleMiniTrackId }
+            }
+            val miniStreamingQueueCanStep = visibleMiniTrackIndex >= 0 &&
+                miniStreamingPlaybackQueue.size > 1
+            val playerHasQueue = playbackController.queueCount > 1 || miniStreamingQueueCanStep
+            val playerCanStep = playbackController.canStep || miniStreamingQueueCanStep
+            val miniStreamingNextPreviewTrack: TrackItem? = if (
+                visibleMiniTrackIndex >= 0 &&
+                visibleMiniTrackIndex + 1 < miniStreamingPlaybackQueue.size
+            ) {
+                val nextMiniTrack = miniStreamingPlaybackQueue[visibleMiniTrackIndex + 1]
+                TrackItem(
+                    id = miniStreamingPlaybackIdForTrack(nextMiniTrack.trackId),
+                    title = nextMiniTrack.title.ifBlank { "Track" },
+                    artist = nextMiniTrack.artists.ifBlank { "Spotify" },
+                    durationMs = nextMiniTrack.durationMs,
+                    filePath = "",
+                    artworkPath = nextMiniTrack.artworkUrl,
+                    addedAt = System.currentTimeMillis(),
+                    isFavorite = false
+                )
+            } else {
+                null
+            }
+
+            val onMiniStreamingPreviousOrDefault: () -> Unit = {
+                val currentIndex = visibleMiniTrackIndex
+                if (currentIndex > 0 && currentIndex < miniStreamingPlaybackQueue.size) {
+                    val previousTrack = miniStreamingPlaybackQueue[currentIndex - 1]
+                    playMiniStreamingTrack(
+                        track = previousTrack,
+                        queue = miniStreamingPlaybackQueue,
+                        startIndex = currentIndex - 1
+                    )
+                } else {
+                    playbackController.playPreviousFromUser()
+                }
+            }
+
+            val onMiniStreamingNextOrDefault: () -> Unit = {
+                val currentIndex = visibleMiniTrackIndex
+                if (currentIndex >= 0 && currentIndex + 1 < miniStreamingPlaybackQueue.size) {
+                    val nextTrack = miniStreamingPlaybackQueue[currentIndex + 1]
+                    playMiniStreamingTrack(
+                        track = nextTrack,
+                        queue = miniStreamingPlaybackQueue,
+                        startIndex = currentIndex + 1
+                    )
+                } else {
+                    playbackController.playNextFromUser()
+                }
+            }
+
             if (miniPlayerVisible && activeMiniTrack != null) {
                 Box(
                     modifier = Modifier
@@ -2362,45 +3247,49 @@ private fun SonoraApp() {
                     MiniPlayer(
                         modifier = Modifier,
                         track = activeMiniTrack,
-                        hasQueue = playbackController.queueCount > 0,
+                        hasQueue = playerHasQueue,
                         isPlaying = playbackController.isPlaying,
-                        canStep = playbackController.canStep,
+                        canStep = playerCanStep,
                         onOpen = { playerVisible = true },
                         onTogglePlayPause = { playbackController.togglePlayPause() },
-                        onPrevious = { playbackController.playPreviousFromUser() },
-                        onNext = { playbackController.playNextFromUser() }
+                        onPrevious = onMiniStreamingPreviousOrDefault,
+                        onNext = onMiniStreamingNextOrDefault
                     )
                 }
             }
 
-            val playerTrack = playbackController.currentTrack
+            val playerTrack = playbackController.currentTrack ?: miniStreamingPendingTrack
             if (playerVisible && playerTrack != null) {
                 val isFavorite = tracks.firstOrNull { it.id == playerTrack.id }?.isFavorite
                     ?: playerTrack.isFavorite
-                PlayerView(
-                    modifier = Modifier.fillMaxSize(),
-                    track = playerTrack,
-                    hasQueue = playbackController.queueCount > 0,
-                    isPlaying = playbackController.isPlaying,
-                    canStep = playbackController.canStep,
+                    PlayerView(
+                        modifier = Modifier.fillMaxSize(),
+                        track = playerTrack,
+                        hasQueue = playerHasQueue,
+                        isPlaying = playbackController.isPlaying,
+                        canStep = playerCanStep,
                     isFavorite = isFavorite,
                     isShuffleEnabled = playbackController.isShuffleEnabled,
                     repeatMode = playbackController.repeatMode,
                     isSleepTimerActive = playbackController.isSleepTimerActive,
                     sleepTimerRemainingMs = playbackController.sleepTimerRemainingMs,
-                    nextTrack = playbackController.predictedNextTrackForSkip(),
+                    nextTrack = miniStreamingNextPreviewTrack ?: playbackController.predictedNextTrackForSkip(),
                     useWaveSlider = appSettings.sliderStyle == PlayerSliderStyle.Wave,
                     artworkStyle = appSettings.artworkStyle,
                     accentColor = resolveAccentColor(appSettings.accentHex),
                     preferredFontFamily = resolveSettingsFontFamily(appSettings.fontStyle),
-                    onClose = { playerVisible = false },
-                    onTogglePlayPause = { playbackController.togglePlayPause() },
-                    onPrevious = { playbackController.playPreviousFromUser() },
-                    onNext = { playbackController.playNextFromUser() },
+                        onClose = { playerVisible = false },
+                        onTogglePlayPause = { playbackController.togglePlayPause() },
+                        onPrevious = onMiniStreamingPreviousOrDefault,
+                        onNext = onMiniStreamingNextOrDefault,
                     onToggleShuffle = { playbackController.toggleShuffleEnabled() },
                     onCycleRepeat = { playbackController.cycleRepeatMode() },
                     onSleepTimerTap = { showSleepTimerDialog = true },
-                    onToggleFavorite = { onFavoriteToggle(playerTrack.id) },
+                    onToggleFavorite = {
+                        if (!playerTrack.id.startsWith(MINI_STREAMING_PLAYBACK_PREFIX)) {
+                            onFavoriteToggle(playerTrack.id)
+                        }
+                    },
                     onSeek = { positionMs -> playbackController.seekTo(positionMs) },
                     positionMsProvider = { playbackController.currentPositionMs() },
                     durationMsProvider = { playbackController.durationMs() }
@@ -3287,132 +4176,213 @@ private fun MusicPage(
 private fun SearchPage(
     listState: androidx.compose.foundation.lazy.LazyListState,
     searchQuery: String,
-    trackResults: List<TrackItem>,
-    playlistResults: List<PlaylistUiItem>,
-    artistResults: List<SearchArtistUiItem>,
+    localPlaylistResults: List<PlaylistUiItem>,
+    localArtistResults: List<SearchArtistUiItem>,
+    onlineTrackResults: List<MiniStreamingTrack>,
+    onlineArtistResults: List<MiniStreamingArtist>,
+    musicResults: List<TrackItem>,
+    onlineTracksLoading: Boolean,
+    onlineArtistsLoading: Boolean,
+    onlineConfigured: Boolean,
+    currentLocalTrackId: String?,
+    currentOnlineTrackId: String?,
+    isPlaying: Boolean,
+    onlineResolvingTrackIds: Set<String>,
+    onlineInstallingTrackIds: Set<String>,
+    onlineQueuePositionsByTrackId: Map<String, Int>,
     trackByID: Map<String, TrackItem>,
     bottomInset: androidx.compose.ui.unit.Dp,
-    onTrackTap: (TrackItem) -> Unit,
-    onPlaylistTap: (PlaylistUiItem) -> Unit,
-    onArtistTap: (SearchArtistUiItem) -> Unit
+    onMusicTrackTap: (TrackItem) -> Unit,
+    onOnlineTrackTap: (MiniStreamingTrack, Int) -> Unit,
+    onLocalPlaylistTap: (PlaylistUiItem) -> Unit,
+    onLocalArtistTap: (SearchArtistUiItem) -> Unit,
+    onOnlineArtistTap: (MiniStreamingArtist) -> Unit
 ) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val hasQuery = searchQuery.trim().isNotBlank()
-    val hasResults = trackResults.isNotEmpty() || playlistResults.isNotEmpty() || artistResults.isNotEmpty()
-    if (!hasResults) {
+    val showLocalDiscoverySections = !hasQuery
+    val hasLocalDiscoveryResults = localPlaylistResults.isNotEmpty() || localArtistResults.isNotEmpty()
+    val hasLocalResults = musicResults.isNotEmpty() || (showLocalDiscoverySections && hasLocalDiscoveryResults)
+    val hasOnlineContent = onlineTrackResults.isNotEmpty() ||
+        onlineArtistResults.isNotEmpty() ||
+        onlineTracksLoading ||
+        onlineArtistsLoading
+    val hasOnlineSections = onlineConfigured && hasQuery
+    if (!hasLocalResults && !(hasOnlineSections && hasOnlineContent)) {
         EmptyListLabel(text = "No search results.")
         return
     }
 
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = {
+                    focusManager.clearFocus(force = true)
+                    keyboardController?.hide()
+                })
+            },
         contentPadding = PaddingValues(top = 2.dp, bottom = bottomInset)
     ) {
-        item(key = "search_intro") {
-            // SearchIntroCard() removed
-        }
-
-        if (playlistResults.isNotEmpty()) {
-            item(key = "search_playlists_heading") {
-                SearchSectionHeading(text = "Playlists")
+        if (showLocalDiscoverySections) {
+            if (localPlaylistResults.isNotEmpty()) {
+                item(key = "search_local_playlists_heading") {
+                    SearchSectionHeading(text = "Playlists")
+                }
+                item(key = "search_local_playlists_row") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(localPlaylistResults, key = { it.id }) { playlist ->
+                            LocalSearchCollectionCard(
+                                title = playlist.name,
+                                subtitle = "${playlist.trackIds.size} tracks",
+                                coverTrack = playlist.trackIds.firstNotNullOfOrNull { trackByID[it] },
+                                placeholderRes = R.drawable.tab_lib,
+                                onClick = { onLocalPlaylistTap(playlist) }
+                            )
+                        }
+                    }
+                }
             }
-            item(key = "search_playlists_row") {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(playlistResults, key = { it.id }) { playlist ->
-                        SearchCollectionCard(
-                            title = playlist.name,
-                            subtitle = "${playlist.trackIds.size} tracks",
-                            coverTrack = playlist.trackIds.firstNotNullOfOrNull { trackByID[it] },
-                            placeholderRes = R.drawable.tab_lib,
-                            onClick = { onPlaylistTap(playlist) }
-                        )
+
+            if (localArtistResults.isNotEmpty()) {
+                item(key = "search_local_artists_heading") {
+                    SearchSectionHeading(text = "Artists")
+                }
+                item(key = "search_local_artists_row") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(localArtistResults, key = { it.key }) { artist ->
+                            val coverTrack = artist.trackIds.firstNotNullOfOrNull { trackByID[it] }
+                            LocalSearchArtistCard(
+                                artist = artist,
+                                coverTrack = coverTrack,
+                                onClick = { onLocalArtistTap(artist) }
+                            )
+                        }
                     }
                 }
             }
         }
 
-        if (artistResults.isNotEmpty()) {
+        if (hasOnlineSections) {
+            item(key = "search_tracks_heading") {
+                SearchSectionHeading(text = "Tracks")
+            }
+
+            if (onlineTracksLoading) {
+                item(key = "search_tracks_loading") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = LocalAccentColor.current
+                        )
+                    }
+                }
+            } else if (onlineTrackResults.isEmpty()) {
+                item(key = "search_tracks_empty") {
+                    SearchSubtleEmptyLabel(text = "No tracks found.")
+                }
+            } else {
+                itemsIndexed(onlineTrackResults, key = { _, item -> item.trackId }) { index, track ->
+                    MiniStreamingTrackRow(
+                        track = track,
+                        isCurrent = currentOnlineTrackId == track.trackId,
+                        isPlaying = isPlaying,
+                        isResolving = onlineResolvingTrackIds.contains(track.trackId),
+                        isInstalling = onlineInstallingTrackIds.contains(track.trackId),
+                        queuePosition = onlineQueuePositionsByTrackId[track.trackId],
+                        onClick = { onOnlineTrackTap(track, index) }
+                    )
+                    if (index < onlineTrackResults.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 58.dp, end = 12.dp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                        )
+                    }
+                }
+            }
+
             item(key = "search_artists_heading") {
                 SearchSectionHeading(text = "Artists")
             }
-            item(key = "search_artists_row") {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(artistResults, key = { it.key }) { artist ->
-                        val coverTrack = artist.trackIds.firstNotNullOfOrNull { trackByID[it] }
-                        SearchArtistCard(
-                            artist = artist,
-                            coverTrack = coverTrack,
-                            onClick = { onArtistTap(artist) }
+
+            if (onlineArtistsLoading) {
+                item(key = "search_artists_loading") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 20.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = LocalAccentColor.current
                         )
+                    }
+                }
+            } else if (onlineArtistResults.isEmpty()) {
+                item(key = "search_artists_empty") {
+                    SearchSubtleEmptyLabel(text = "No artists found.")
+                }
+            } else {
+                item(key = "search_artists_row") {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 18.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(onlineArtistResults, key = { it.artistId }) { artist ->
+                            OnlineSearchArtistCard(
+                                artist = artist,
+                                onClick = { onOnlineArtistTap(artist) }
+                            )
+                        }
                     }
                 }
             }
         }
 
-        if (trackResults.isNotEmpty()) {
-            item(key = "search_tracks_heading") {
-                SearchSectionHeading(text = if (hasQuery) "Tracks" else "Music")
+        if (musicResults.isNotEmpty()) {
+            item(key = "search_music_heading") {
+                SearchSectionHeading(text = "Music")
             }
-            item(key = "search_tracks_row") {
+            item(key = "search_music_row") {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 18.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(trackResults, key = { it.id }) { track ->
-                        HomeRecommendationCard(
+                    items(musicResults, key = { it.id }) { track ->
+                        SearchMusicTrackCard(
                             track = track,
-                            onClick = { onTrackTap(track) }
+                            isCurrent = currentLocalTrackId == track.id,
+                            isPlaying = isPlaying,
+                            onClick = { onMusicTrackTap(track) }
                         )
                     }
                 }
             }
+        } else if ((!hasOnlineSections || !hasOnlineContent) &&
+            !(showLocalDiscoverySections && hasLocalDiscoveryResults)
+        ) {
+            item(key = "search_music_empty") {
+                SearchSubtleEmptyLabel(text = "No local music found.")
+            }
         }
     }
 }
-
-@Composable
-private fun SearchIntroCard() {
-    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    val bg = if (isDark) {
-        Color.White.copy(alpha = 0.08f)
-    } else {
-        Color.Black.copy(alpha = 0.05f)
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(bg)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            text = "Search",
-            style = TextStyle(
-                fontFamily = SonoraAndroidHomeHeadingFontFamily,
-                fontWeight = FontWeight.ExtraBold,
-                fontSize = 22.sp
-            ),
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = "Find tracks, artists and playlists in one place.",
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Normal
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
 @Composable
 private fun SearchSectionHeading(text: String) {
     Text(
@@ -3430,7 +4400,96 @@ private fun SearchSectionHeading(text: String) {
 }
 
 @Composable
-private fun SearchCollectionCard(
+private fun SearchSubtleEmptyLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium.copy(
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 8.dp)
+    )
+}
+
+@Composable
+private fun SearchMusicTrackCard(
+    track: TrackItem,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(184.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(184.dp)
+                .clip(RoundedCornerShape(12.dp))
+        ) {
+            TrackArtwork(
+                track = track,
+                placeholderRes = R.drawable.tab_note,
+                placeholderSize = 48.dp,
+                decodeMaxSize = 512,
+                modifier = Modifier.fillMaxSize()
+            )
+            if (isCurrent) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.30f),
+                    modifier = Modifier
+                        .padding(10.dp)
+                        .align(Alignment.TopStart)
+                        .clip(RoundedCornerShape(999.dp))
+                ) {
+                    Box(
+                        modifier = Modifier.size(28.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(
+                                if (isPlaying) R.drawable.ic_global_pause else R.drawable.ic_global_play
+                            ),
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            colorFilter = ColorFilter.tint(Color.White),
+                            modifier = Modifier.size(15.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = track.displayTitle(),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = if (isCurrent) LocalAccentColor.current else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = track.artist.ifBlank { "Unknown Artist" },
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Normal
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun LocalSearchCollectionCard(
     title: String,
     subtitle: String,
     coverTrack: TrackItem?,
@@ -3477,7 +4536,7 @@ private fun SearchCollectionCard(
 }
 
 @Composable
-private fun SearchArtistCard(
+private fun LocalSearchArtistCard(
     artist: SearchArtistUiItem,
     coverTrack: TrackItem?,
     onClick: () -> Unit
@@ -3518,6 +4577,402 @@ private fun SearchArtistCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+@Composable
+private fun LocalSearchTrackRow(
+    track: TrackItem,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+            if (isCurrent && isPlaying) {
+                Image(
+                    painter = painterResource(R.drawable.ic_global_pause),
+                    contentDescription = "Playing",
+                    colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
+                    modifier = Modifier.size(17.dp),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                TrackArtwork(
+                    track = track,
+                    placeholderRes = R.drawable.tab_note,
+                    placeholderSize = 18.dp,
+                    decodeMaxSize = 160,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = track.displayTitle(),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = if (isCurrent) LocalAccentColor.current else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = track.artist.ifBlank { "Unknown Artist" },
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = formatDuration(track.durationMs),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = TextStyle(
+                fontFamily = SonoraAndroidSFProSemiboldFamily,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            textAlign = TextAlign.Right,
+            modifier = Modifier.widthIn(min = 44.dp)
+        )
+    }
+}
+
+@Composable
+private fun MiniStreamingTrackRow(
+    track: MiniStreamingTrack,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    isResolving: Boolean,
+    isInstalling: Boolean,
+    queuePosition: Int?,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp)
+            .clickable(enabled = !(isInstalling || isResolving), onClick = onClick)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+            if (isCurrent && isPlaying) {
+                Image(
+                    painter = painterResource(R.drawable.ic_global_pause),
+                    contentDescription = "Playing",
+                    colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface),
+                    modifier = Modifier.size(17.dp),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                MiniStreamingArtwork(
+                    artworkUrl = track.artworkUrl,
+                    placeholderRes = R.drawable.tab_note,
+                    placeholderSize = 18.dp,
+                    decodeMaxSize = 160,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = track.title.ifBlank { "Track" },
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = if (isCurrent) LocalAccentColor.current else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = track.artists.ifBlank { "Spotify" },
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+        if (isInstalling || isResolving) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = LocalAccentColor.current
+            )
+        } else {
+            val durationLabel = formatDuration(track.durationMs)
+            val trailingLabel = queuePosition?.let { "$durationLabel · #$it" } ?: durationLabel
+            Text(
+                text = trailingLabel,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = TextStyle(
+                    fontFamily = SonoraAndroidSFProSemiboldFamily,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                textAlign = TextAlign.Right,
+                modifier = Modifier.widthIn(min = 44.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun OnlineSearchArtistCard(
+    artist: MiniStreamingArtist,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(184.dp)
+            .clickable(onClick = onClick)
+    ) {
+        MiniStreamingArtwork(
+            artworkUrl = artist.artworkUrl,
+            placeholderRes = R.drawable.tab_note,
+            placeholderSize = 52.dp,
+            decodeMaxSize = 320,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(184.dp)
+                .clip(RoundedCornerShape(12.dp))
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = artist.name.ifBlank { "Artist" },
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun MiniStreamingArtistPage(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    artist: MiniStreamingArtist,
+    tracks: List<MiniStreamingTrack>,
+    isLoading: Boolean,
+    currentTrackId: String?,
+    isPlaying: Boolean,
+    isSleepTimerActive: Boolean,
+    resolvingTrackIds: Set<String>,
+    installingTrackIds: Set<String>,
+    queuePositionsByTrackId: Map<String, Int>,
+    canLoadMore: Boolean,
+    isLoadingMore: Boolean,
+    onPlayTap: () -> Unit,
+    onShuffleTap: () -> Unit,
+    onSleepTap: () -> Unit,
+    onLoadMore: () -> Unit,
+    onTrackTap: (MiniStreamingTrack, Int) -> Unit
+) {
+    val isArtistQueuePlaying = isPlaying &&
+        !currentTrackId.isNullOrBlank() &&
+        tracks.any { it.trackId == currentTrackId }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = 2.dp, bottom = 2.dp)
+    ) {
+        item(key = "artist_header") {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(364.dp)
+            ) {
+                MiniStreamingArtwork(
+                    artworkUrl = artist.artworkUrl,
+                    placeholderRes = R.drawable.tab_note,
+                    placeholderSize = 92.dp,
+                    decodeMaxSize = 640,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 16.dp)
+                        .size(212.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                )
+                Text(
+                    text = artist.name.ifBlank { "Artist" },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 236.dp, start = 14.dp, end = 14.dp),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.headlineMedium.copy(
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 272.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    PlainControlButton(
+                        iconRes = if (isSleepTimerActive) R.drawable.sleep_fill else R.drawable.sleep,
+                        contentDescription = "Sleep timer",
+                        onClick = onSleepTap,
+                        enabled = true,
+                        size = 46.dp,
+                        iconSize = 29.dp,
+                        iconWidth = 24.5.dp,
+                        iconHeight = 29.dp,
+                        tint = if (isSleepTimerActive) {
+                            LocalAccentColor.current
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                    )
+                    Surface(
+                        modifier = Modifier
+                            .size(66.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable(enabled = tracks.isNotEmpty(), onClick = onPlayTap),
+                        color = LocalAccentColor.current
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Image(
+                                painter = painterResource(
+                                    if (isArtistQueuePlaying) {
+                                        R.drawable.ic_global_pause
+                                    } else {
+                                        R.drawable.ic_global_play
+                                    }
+                                ),
+                                contentDescription = if (isArtistQueuePlaying) "Pause artist" else "Play artist",
+                                colorFilter = ColorFilter.tint(Color.White),
+                                modifier = Modifier
+                                    .size(29.dp)
+                                    .offset(x = if (isArtistQueuePlaying) 0.dp else 1.dp),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                    }
+                    PlainControlButton(
+                        iconRes = R.drawable.ic_player_shuffle,
+                        contentDescription = "Shuffle artist",
+                        onClick = onShuffleTap,
+                        enabled = tracks.isNotEmpty(),
+                        size = 46.dp,
+                        iconSize = 29.dp,
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+
+        if (isLoading) {
+            item(key = "artist_loading") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 2.dp,
+                        color = LocalAccentColor.current
+                    )
+                }
+            }
+        } else if (tracks.isEmpty()) {
+            item(key = "artist_empty") {
+                EmptyListLabel(text = "No tracks found for this artist.")
+            }
+        } else {
+            itemsIndexed(tracks, key = { _, item -> item.trackId }) { index, track ->
+                MiniStreamingTrackRow(
+                    track = track,
+                    isCurrent = currentTrackId == track.trackId,
+                    isPlaying = isPlaying,
+                    isResolving = resolvingTrackIds.contains(track.trackId),
+                    isInstalling = installingTrackIds.contains(track.trackId),
+                    queuePosition = queuePositionsByTrackId[track.trackId],
+                    onClick = { onTrackTap(track, index) }
+                )
+                if (index < tracks.lastIndex) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 58.dp, end = 12.dp),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                    )
+                }
+            }
+
+            if (isLoadingMore) {
+                item(key = "artist_loading_more") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = LocalAccentColor.current
+                        )
+                    }
+                }
+            } else if (canLoadMore) {
+                item(key = "artist_load_more_trigger") {
+                    LaunchedEffect(tracks.size) {
+                        onLoadMore()
+                    }
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -6455,6 +7910,92 @@ private fun PlaylistRow(
 }
 
 @Composable
+private fun MiniStreamingArtwork(
+    artworkUrl: String?,
+    placeholderRes: Int,
+    placeholderSize: androidx.compose.ui.unit.Dp = 20.dp,
+    decodeMaxSize: Int = 512,
+    modifier: Modifier = Modifier
+) {
+    val cacheKey = remember(artworkUrl, decodeMaxSize) {
+        val normalized = artworkUrl?.trim().orEmpty()
+        if (normalized.isBlank()) {
+            null
+        } else {
+            "mini|$normalized|$decodeMaxSize"
+        }
+    }
+
+    var imageBitmap by remember(cacheKey) {
+        mutableStateOf(cacheKey?.let { artworkCacheGet(it) })
+    }
+    var isLoading by remember(cacheKey) {
+        mutableStateOf(cacheKey != null && imageBitmap == null)
+    }
+
+    LaunchedEffect(cacheKey, artworkUrl) {
+        val key = cacheKey ?: run {
+            imageBitmap = null
+            isLoading = false
+            return@LaunchedEffect
+        }
+        if (imageBitmap != null) {
+            isLoading = false
+            return@LaunchedEffect
+        }
+        if (artworkMissingCacheContains(key)) {
+            imageBitmap = null
+            isLoading = false
+            return@LaunchedEffect
+        }
+
+        isLoading = true
+        val url = artworkUrl?.trim().orEmpty()
+        val decoded = withContext(Dispatchers.IO) {
+            decodeArtworkBitmap(url, maxSize = decodeMaxSize)
+        }
+        if (decoded != null) {
+            artworkCachePut(key, decoded)
+        } else {
+            artworkMissingCachePut(key)
+        }
+        imageBitmap = decoded
+        isLoading = false
+    }
+
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap!!,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Image(
+                painter = painterResource(placeholderRes),
+                contentDescription = null,
+                colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurfaceVariant),
+                modifier = Modifier.size(placeholderSize),
+                contentScale = ContentScale.Fit
+            )
+        }
+
+        if (isLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.22f))
+            )
+            CircularProgressIndicator(
+                modifier = Modifier.size((placeholderSize.value + 8f).dp),
+                strokeWidth = 2.dp
+            )
+        }
+    }
+}
+
+@Composable
 private fun TrackArtwork(
     track: TrackItem?,
     placeholderRes: Int,
@@ -7955,10 +9496,56 @@ private fun decodeTrackArtworkBitmapRaw(
     return decodeEmbeddedArtworkBitmapRaw(track.filePath, maxSize)
 }
 
+private fun isRemoteArtworkPath(path: String): Boolean {
+    return path.startsWith("http://", ignoreCase = true) ||
+        path.startsWith("https://", ignoreCase = true)
+}
+
+private fun decodeRemoteArtworkBitmapRaw(path: String, maxSize: Int = 1024): android.graphics.Bitmap? {
+    return runCatching {
+        val connection = (URL(path).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            connectTimeout = 15_000
+            readTimeout = 20_000
+            setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+        }
+        connection.connect()
+        if (connection.responseCode !in 200..299) {
+            connection.disconnect()
+            return@runCatching null
+        }
+        val bytes = connection.inputStream.use { it.readBytes() }
+        connection.disconnect()
+        if (bytes.isEmpty()) {
+            return@runCatching null
+        }
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return@runCatching null
+        }
+
+        var sampleSize = 1
+        while ((bounds.outWidth / sampleSize) > maxSize || (bounds.outHeight / sampleSize) > maxSize) {
+            sampleSize *= 2
+        }
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+        }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+    }.getOrNull()
+}
+
 private fun decodeArtworkBitmap(path: String, maxSize: Int = 1024): androidx.compose.ui.graphics.ImageBitmap? {
     return runCatching {
         if (path.isBlank()) {
             return@runCatching null
+        }
+        if (isRemoteArtworkPath(path)) {
+            return@runCatching decodeRemoteArtworkBitmapRaw(path, maxSize)?.asImageBitmap()
         }
         val file = File(path)
         if (!file.exists()) {
@@ -7988,6 +9575,9 @@ private fun decodeArtworkBitmapRaw(path: String, maxSize: Int = 1024): android.g
     return runCatching {
         if (path.isBlank()) {
             return@runCatching null
+        }
+        if (isRemoteArtworkPath(path)) {
+            return@runCatching decodeRemoteArtworkBitmapRaw(path, maxSize)
         }
         val file = File(path)
         if (!file.exists()) {
