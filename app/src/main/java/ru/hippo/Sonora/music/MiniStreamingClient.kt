@@ -18,6 +18,7 @@ private const val BACKEND_DOWNLOAD_PATH = "/api/download"
 private const val BACKEND_TOP_TRACKS_PATH_TEMPLATE = "/api/spotify/artists/%s/top-tracks"
 private const val INSTALL_UNAVAILABLE_MESSAGE = "Установка временно недоступна, попробуйте завтра."
 private const val VPN_REQUIRED_MESSAGE = "Требуется VPN из-за региональных ограничений (451)."
+private const val BACKEND_USER_AGENT = "Sonora-iOS/1.0"
 
 data class MiniStreamingTrack(
     val trackId: String,
@@ -57,6 +58,9 @@ class MiniStreamingClient(
     @Volatile
     private var lastResolveFailureMessage: String = ""
 
+    @Volatile
+    private var artistsSectionEnabled: Boolean = true
+
     fun isConfigured(): Boolean {
         return normalizedBackendBaseUrl.isNotBlank()
     }
@@ -65,6 +69,10 @@ class MiniStreamingClient(
         val message = lastResolveFailureMessage.trim()
         lastResolveFailureMessage = ""
         return message.ifBlank { null }
+    }
+
+    fun areArtistsEnabled(): Boolean {
+        return artistsSectionEnabled
     }
 
     suspend fun searchTracks(query: String, limit: Int = 8): List<MiniStreamingTrack> {
@@ -87,12 +95,15 @@ class MiniStreamingClient(
                 )
             ) ?: return@withContext emptyList()
 
+            // Backend-only resolve flow for install:
+            // Android client calls only Sonora backend `/api/download` here.
             val response = requestJson(url = requestUrl)
             if (response.statusCode !in 200..299) {
                 return@withContext emptyList()
             }
 
             val payload = extractPayload(response.payload)
+            updateArtistsSectionFlag(payload, response.payload)
             val tracks = payload.optJSONObject("tracks")?.optJSONArray("items")
                 ?: response.payload?.optJSONObject("tracks")?.optJSONArray("items")
                 ?: JSONArray()
@@ -126,6 +137,7 @@ class MiniStreamingClient(
             }
 
             val payload = extractPayload(response.payload)
+            updateArtistsSectionFlag(payload, response.payload)
             val artists = payload.optJSONObject("artists")?.optJSONArray("items")
                 ?: response.payload?.optJSONObject("artists")?.optJSONArray("items")
                 ?: JSONArray()
@@ -231,11 +243,17 @@ class MiniStreamingClient(
             val normalizedMessage = when {
                 status == 451 -> VPN_REQUIRED_MESSAGE
                 extractedMessage.isNotBlank() -> extractedMessage
-                status !in 200..299 -> "RapidAPI request failed ($status)."
-                else -> "RapidAPI did not return media url."
+                status !in 200..299 -> "Backend request failed ($status)."
+                else -> "Backend did not return media url."
             }
+            val normalizedMessageLower = normalizedMessage.trim().lowercase()
 
-            lastResolveFailureMessage = if (isQuotaMessage(normalizedMessage)) {
+            lastResolveFailureMessage = if (
+                isQuotaMessage(normalizedMessage) ||
+                normalizedMessageLower.contains("ключ с сервера") ||
+                normalizedMessageLower.contains("server key") ||
+                normalizedMessageLower.contains("api/available")
+            ) {
                 INSTALL_UNAVAILABLE_MESSAGE
             } else {
                 normalizedMessage
@@ -258,7 +276,7 @@ class MiniStreamingClient(
                     instanceFollowRedirects = true
                     connectTimeout = 25_000
                     readTimeout = 120_000
-                    setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+                    setRequestProperty("User-Agent", BACKEND_USER_AGENT)
                 }
                 try {
                     connection.connect()
@@ -299,7 +317,7 @@ class MiniStreamingClient(
                 connectTimeout = 25_000
                 readTimeout = 30_000
                 setRequestProperty("Accept", "application/json")
-                setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+                setRequestProperty("User-Agent", BACKEND_USER_AGENT)
                 for ((header, value) in headers) {
                     setRequestProperty(header, value)
                 }
@@ -369,6 +387,58 @@ class MiniStreamingClient(
         return payload.optJSONObject("data") ?: payload
     }
 
+    private fun updateArtistsSectionFlag(payloadNode: JSONObject?, rootNode: JSONObject?) {
+        val fromPayload = parseArtistsSectionFlag(payloadNode)
+        if (fromPayload != null) {
+            artistsSectionEnabled = fromPayload
+            return
+        }
+        val fromRoot = parseArtistsSectionFlag(rootNode)
+        if (fromRoot != null) {
+            artistsSectionEnabled = fromRoot
+        }
+    }
+
+    private fun parseArtistsSectionFlag(node: JSONObject?): Boolean? {
+        if (node == null) {
+            return null
+        }
+
+        parseBooleanLike(node.opt("artistsEnabled"))?.let { return it }
+        parseBooleanLike(node.opt("showArtists"))?.let { return it }
+
+        if (node.has("artists")) {
+            val artistsValue = node.opt("artists")
+            if (artistsValue !is JSONObject && artistsValue !is JSONArray) {
+                parseBooleanLike(artistsValue)?.let { return it }
+            }
+        }
+
+        val dataNode = node.optJSONObject("data")
+        if (dataNode != null && dataNode !== node) {
+            parseArtistsSectionFlag(dataNode)?.let { return it }
+        }
+
+        return null
+    }
+
+    private fun parseBooleanLike(value: Any?): Boolean? {
+        return when (value) {
+            null -> null
+            is Boolean -> value
+            is Number -> value.toInt() != 0
+            is String -> {
+                val normalized = value.trim().lowercase()
+                when (normalized) {
+                    "no", "false", "off", "0", "disabled", "hide", "hidden" -> false
+                    "yes", "true", "on", "1", "enabled", "show", "visible" -> true
+                    else -> null
+                }
+            }
+            else -> null
+        }
+    }
+
     private fun parseTracksArray(items: JSONArray?, limit: Int): List<MiniStreamingTrack> {
         if (items == null) {
             return emptyList()
@@ -387,35 +457,121 @@ class MiniStreamingClient(
     }
 
     private fun parseTrackItem(item: JSONObject): MiniStreamingTrack? {
-        val trackId = item.optString("id").trim()
-            .ifBlank {
-                item.optString("trackId").trim()
-                    .ifBlank { item.optString("spotifyTrackId").trim() }
-            }
+        val node = unwrapTrackObject(item)
+        val trackId = extractTrackId(node)
         if (trackId.isBlank()) {
             return null
         }
 
-        val artwork = bestImageUrl(item.optJSONObject("album")?.optJSONArray("images"))
+        val artwork = bestImageUrl(node.optJSONObject("album")?.optJSONArray("images"))
             .ifBlank {
-                item.optString("artworkUrl").trim()
-                    .ifBlank { item.optString("thumbnail").trim() }
+                bestImageUrl(
+                    node.optJSONObject("albumOfTrack")
+                        ?.optJSONObject("coverArt")
+                        ?.optJSONArray("sources")
+                )
+            }
+            .ifBlank {
+                node.optString("artworkUrl").trim()
+                    .ifBlank { node.optString("thumbnail").trim() }
+                    .ifBlank { node.optString("cover").trim() }
             }
 
         return MiniStreamingTrack(
             trackId = trackId,
-            title = item.optString("name").ifBlank {
-                item.optString("title").ifBlank { "Track" }
+            title = node.optString("name").ifBlank {
+                node.optString("title").ifBlank {
+                    node.optString("trackName").ifBlank { "Track" }
+                }
             },
-            artists = parseArtists(item.optJSONArray("artists")).ifBlank {
-                item.optString("artist").ifBlank { "Spotify" }
+            artists = parseArtists(node.optJSONArray("artists")).ifBlank {
+                parseArtists(node.optJSONObject("artistsV2")?.optJSONArray("items"))
+            }.ifBlank {
+                node.optString("artist").trim()
+            }.ifBlank {
+                node.optString("artistName").trim()
+            }.ifBlank {
+                "Spotify"
             },
-            durationMs = item.optLong("duration_ms", 0L)
-                .coerceAtLeast(0L)
-                .takeIf { it > 0L }
-                ?: parseDurationToMs(item.optString("duration")),
+            durationMs = parseDurationMsFromItem(node),
             artworkUrl = artwork
         )
+    }
+
+    private fun unwrapTrackObject(item: JSONObject): JSONObject {
+        val itemNode = item.optJSONObject("item")
+        if (itemNode != null) {
+            itemNode.optJSONObject("data")?.let { return it }
+            return itemNode
+        }
+        val trackNode = item.optJSONObject("track")
+        if (trackNode != null) {
+            trackNode.optJSONObject("data")?.let { return it }
+            return trackNode
+        }
+        item.optJSONObject("data")?.let { return it }
+        return item
+    }
+
+    private fun extractTrackId(node: JSONObject): String {
+        val direct = node.optString("id").trim()
+            .ifBlank { node.optString("trackId").trim() }
+            .ifBlank { node.optString("spotifyTrackId").trim() }
+        if (direct.isNotBlank()) {
+            return direct
+        }
+        val fromUri = parseTrackIdFromText(node.optString("uri"))
+        if (fromUri.isNotBlank()) {
+            return fromUri
+        }
+        return parseTrackIdFromText(node.optJSONObject("external_urls")?.optString("spotify"))
+    }
+
+    private fun parseTrackIdFromText(raw: String?): String {
+        val text = raw?.trim().orEmpty()
+        if (text.isBlank()) {
+            return ""
+        }
+        Regex("spotify:track:([A-Za-z0-9]{22})").find(text)?.let { match ->
+            return match.groupValues.getOrNull(1).orEmpty()
+        }
+        Regex("/track/([A-Za-z0-9]{22})").find(text)?.let { match ->
+            return match.groupValues.getOrNull(1).orEmpty()
+        }
+        return if (Regex("^[A-Za-z0-9]{22}$").matches(text)) text else ""
+    }
+
+    private fun parseDurationMsFromItem(node: JSONObject): Long {
+        val durationMs = node.optLong("duration_ms", 0L).coerceAtLeast(0L)
+        if (durationMs > 0L) {
+            return durationMs
+        }
+        val altDurationMs = node.optLong("durationMs", 0L).coerceAtLeast(0L)
+        if (altDurationMs > 0L) {
+            return altDurationMs
+        }
+
+        val durationNode = node.optJSONObject("duration")
+        if (durationNode != null) {
+            val nestedDurationMs = durationNode.optLong("totalMilliseconds", 0L).coerceAtLeast(0L)
+                .takeIf { it > 0L }
+                ?: durationNode.optLong("ms", 0L).coerceAtLeast(0L)
+            if (nestedDurationMs > 0L) {
+                return nestedDurationMs
+            }
+        }
+
+        val trackDurationNode = node.optJSONObject("trackDuration")
+        if (trackDurationNode != null) {
+            val nestedDurationMs = trackDurationNode.optLong("totalMilliseconds", 0L).coerceAtLeast(0L)
+                .takeIf { it > 0L }
+                ?: trackDurationNode.optLong("ms", 0L).coerceAtLeast(0L)
+            if (nestedDurationMs > 0L) {
+                return nestedDurationMs
+            }
+        }
+
+        return parseDurationToMs(node.optString("duration"))
     }
 
     private fun parseDownloadPayload(payload: JSONObject?, trackId: String): MiniStreamingDownloadPayload? {

@@ -149,6 +149,9 @@ import androidx.compose.ui.zIndex
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
@@ -171,6 +174,8 @@ import ru.hippo.Sonora.music.PlaybackController
 import ru.hippo.Sonora.music.PlaybackHistoryStore
 import ru.hippo.Sonora.music.PlaylistStore
 import ru.hippo.Sonora.music.RepeatMode
+import ru.hippo.Sonora.music.SonoraBackupArchive
+import ru.hippo.Sonora.music.SonoraBackupSettings
 import ru.hippo.Sonora.music.TrackAnalytics
 import ru.hippo.Sonora.music.TrackAnalyticsStore
 import ru.hippo.Sonora.music.TrackItem
@@ -179,8 +184,6 @@ import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerBorderDark
 import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerBorderLight
 import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerDark
 import ru.hippo.Sonora.ui.theme.SonoraMiniPlayerLight
-import ru.hippo.Sonora.ui.theme.SonoraTabActiveDark
-import ru.hippo.Sonora.ui.theme.SonoraTabActiveLight
 import ru.hippo.Sonora.ui.theme.SonoraTabBarDark
 import ru.hippo.Sonora.ui.theme.SonoraTabBarLight
 import ru.hippo.Sonora.ui.theme.SonoraTabInactiveDark
@@ -445,6 +448,12 @@ private const val MINI_STREAMING_ARTIST_PAGE_SIZE = 60
 private val TrackGapSecondsOptions = listOf(0f, 0.5f, 1f, 1.5f, 2f, 3f, 5f, 8f)
 private val MaxStorageMbOptions = listOf(-1, 512, 1024, 2048, 3072, 4096, 6144, 8192)
 
+private fun buildBackupArchiveFileName(timestampMs: Long = System.currentTimeMillis()): String {
+    val formatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+    val suffix = formatter.format(Date(timestampMs))
+    return "sonora_backup_${suffix}.sonoraarc"
+}
+
 private fun nearestTrackGapSecondsOption(value: Float): Float {
     val clamped = value.coerceIn(0f, 8f)
     return TrackGapSecondsOptions.minByOrNull { abs(it - clamped) } ?: 0f
@@ -600,6 +609,7 @@ private fun SonoraApp() {
     var miniStreamingArtists by remember { mutableStateOf<List<MiniStreamingArtist>>(emptyList()) }
     var miniStreamingTracksLoading by remember { mutableStateOf(false) }
     var miniStreamingArtistsLoading by remember { mutableStateOf(false) }
+    var miniStreamingArtistsSectionVisible by remember { mutableStateOf(true) }
     var miniStreamingSearchToken by remember { mutableIntStateOf(0) }
     var miniStreamingResolvingTrackIds by remember { mutableStateOf(setOf<String>()) }
     var miniStreamingInstallingTrackIds by remember { mutableStateOf(setOf<String>()) }
@@ -1421,6 +1431,7 @@ private fun SonoraApp() {
         if (!isSearchRoot) {
             miniStreamingTracksLoading = false
             miniStreamingArtistsLoading = false
+            miniStreamingArtistsSectionVisible = miniStreamingClient.areArtistsEnabled()
             miniStreamingTracks = emptyList()
             miniStreamingArtists = emptyList()
             return@LaunchedEffect
@@ -1432,6 +1443,7 @@ private fun SonoraApp() {
                 if (!miniStreamingClient.isConfigured()) {
                     miniStreamingTracksLoading = false
                     miniStreamingArtistsLoading = false
+                    miniStreamingArtistsSectionVisible = miniStreamingClient.areArtistsEnabled()
                     miniStreamingTracks = emptyList()
                     miniStreamingArtists = emptyList()
                     return@collectLatest
@@ -1440,6 +1452,7 @@ private fun SonoraApp() {
                 if (normalizedQuery.isBlank()) {
                     miniStreamingTracksLoading = false
                     miniStreamingArtistsLoading = false
+                    miniStreamingArtistsSectionVisible = miniStreamingClient.areArtistsEnabled()
                     miniStreamingTracks = emptyList()
                     miniStreamingArtists = emptyList()
                     return@collectLatest
@@ -1448,18 +1461,22 @@ private fun SonoraApp() {
                 miniStreamingTracksLoading = true
                 miniStreamingArtistsLoading = true
 
-                val (resolvedTracks, resolvedArtists) = kotlinx.coroutines.coroutineScope {
-                    val tracksDeferred = async(Dispatchers.IO) {
-                        miniStreamingClient.searchTracks(normalizedQuery, limit = MINI_STREAMING_TRACKS_SEARCH_LIMIT)
-                    }
-                    val artistsDeferred = async(Dispatchers.IO) {
+                val resolvedTracks = withContext(Dispatchers.IO) {
+                    miniStreamingClient.searchTracks(normalizedQuery, limit = MINI_STREAMING_TRACKS_SEARCH_LIMIT)
+                }
+                val artistsVisibleAfterTracks = miniStreamingClient.areArtistsEnabled()
+                val resolvedArtists = if (artistsVisibleAfterTracks) {
+                    withContext(Dispatchers.IO) {
                         miniStreamingClient.searchArtists(normalizedQuery, limit = MINI_STREAMING_ARTISTS_SEARCH_LIMIT)
                     }
-                    tracksDeferred.await() to artistsDeferred.await()
+                } else {
+                    emptyList()
                 }
+                val artistsVisibleAfterSearch = miniStreamingClient.areArtistsEnabled()
 
                 miniStreamingTracks = resolvedTracks
-                miniStreamingArtists = resolvedArtists
+                miniStreamingArtists = if (artistsVisibleAfterSearch) resolvedArtists else emptyList()
+                miniStreamingArtistsSectionVisible = artistsVisibleAfterSearch
                 miniStreamingTracksLoading = false
                 miniStreamingArtistsLoading = false
             }
@@ -2006,6 +2023,120 @@ private fun SonoraApp() {
                 }
             }
         }
+    val exportBackupLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/octet-stream")
+        ) { uri ->
+            if (uri == null) {
+                return@rememberLauncherForActivityResult
+            }
+
+            val tracksSnapshot = tracks
+            val playlistsSnapshot = userPlaylists
+            val settingsSnapshot = appSettings
+
+            scope.launch {
+                val exported = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.use { output ->
+                            SonoraBackupArchive.exportToStream(
+                                output = output,
+                                tracks = tracksSnapshot,
+                                playlists = playlistsSnapshot,
+                                settings = SonoraBackupSettings(
+                                    sliderStyle = settingsSnapshot.sliderStyle.storageValue,
+                                    artworkStyle = settingsSnapshot.artworkStyle.storageValue,
+                                    fontStyle = settingsSnapshot.fontStyle.storageValue,
+                                    accentHex = settingsSnapshot.accentHex,
+                                    preservePlayerModes = settingsSnapshot.preservePlayerModes,
+                                    trackGapSeconds = settingsSnapshot.trackGapSeconds,
+                                    maxStorageMb = settingsSnapshot.maxStorageMb
+                                )
+                            )
+                        } != null
+                    }.getOrDefault(false)
+                }
+
+                if (exported) {
+                    snackbarHostState.showSnackbar("Backup archive exported")
+                } else {
+                    snackbarHostState.showSnackbar("Could not export backup archive")
+                }
+            }
+        }
+    val importBackupLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) {
+                return@rememberLauncherForActivityResult
+            }
+
+            scope.launch {
+                val restored = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            SonoraBackupArchive.importFromStream(context, input)
+                        }
+                    }.getOrNull()
+                }
+
+                if (restored == null) {
+                    snackbarHostState.showSnackbar("Could not import backup archive")
+                    return@launch
+                }
+
+                val currentTracks = tracks
+                val currentPlaylists = userPlaylists
+                val applied = withContext(Dispatchers.IO) {
+                    runCatching {
+                        currentTracks.forEach { track ->
+                            trackStore.deleteTrackFiles(track)
+                        }
+                        currentPlaylists.forEach { playlist ->
+                            playlist.customCoverPath
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { coverPath ->
+                                    runCatching { File(coverPath).delete() }
+                                }
+                        }
+                        trackStore.saveTracks(restored.tracks)
+                        playlistStore.savePlaylists(restored.playlists)
+                        true
+                    }.getOrDefault(false)
+                }
+
+                if (!applied) {
+                    snackbarHostState.showSnackbar("Backup import failed while applying data")
+                    return@launch
+                }
+
+                tracks = restored.tracks
+                userPlaylists = restored.playlists
+                miniStreamingInstalledTrackMap = emptyMap()
+                settingsStore.saveMiniStreamingInstalledTrackMap(emptyMap())
+                settingsStore.clearPlaybackSessionSnapshot()
+
+                restored.settings?.let { restoredSettings ->
+                    val updatedSettings = SonoraAppSettings(
+                        sliderStyle = PlayerSliderStyle.fromStorage(restoredSettings.sliderStyle),
+                        artworkStyle = ArtworkStyle.fromStorage(restoredSettings.artworkStyle),
+                        fontStyle = AppFontStyle.fromStorage(restoredSettings.fontStyle),
+                        accentHex = normalizeHexColor(restoredSettings.accentHex) ?: DEFAULT_ACCENT_HEX,
+                        preservePlayerModes = restoredSettings.preservePlayerModes,
+                        trackGapSeconds = nearestTrackGapSecondsOption(restoredSettings.trackGapSeconds),
+                        maxStorageMb = nearestMaxStorageOptionMb(restoredSettings.maxStorageMb)
+                    )
+                    appSettings = updatedSettings
+                    settingsStore.save(updatedSettings)
+                }
+
+                storageUsageBytes = withContext(Dispatchers.IO) {
+                    computeAppStorageUsageBytes(context)
+                }
+                snackbarHostState.showSnackbar(
+                    "Backup imported: ${restored.tracks.size} track(s), ${restored.playlists.size} playlist(s)"
+                )
+            }
+        }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -2015,7 +2146,6 @@ private fun SonoraApp() {
 
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
     val tabBarBackground = if (isDark) SonoraTabBarDark else SonoraTabBarLight
-    val tabActiveColor = if (isDark) SonoraTabActiveDark else SonoraTabActiveLight
     val tabInactiveColor = if (isDark) SonoraTabInactiveDark else SonoraTabInactiveLight
 
     val isCreateNameScreen = playlistCreateStep == PlaylistCreateStep.Name
@@ -2188,6 +2318,7 @@ private fun SonoraApp() {
     val accentColor = remember(appSettings.accentHex) {
         resolveAccentColor(appSettings.accentHex)
     }
+    val tabActiveColor = accentColor
 
     CompositionLocalProvider(LocalAccentColor provides accentColor) {
         Scaffold(
@@ -2832,6 +2963,12 @@ private fun SonoraApp() {
                         },
                         onOpenGithub = {
                             openExternalUrl(context, githubProjectURL)
+                        },
+                        onExportBackup = {
+                            exportBackupLauncher.launch(buildBackupArchiveFileName())
+                        },
+                        onImportBackup = {
+                            importBackupLauncher.launch(arrayOf("*/*"))
                         }
                     )
                 }
@@ -3020,6 +3157,7 @@ private fun SonoraApp() {
                     musicResults = localSearchTracksForSearch,
                     onlineTracksLoading = miniStreamingTracksLoading,
                     onlineArtistsLoading = miniStreamingArtistsLoading,
+                    onlineArtistsVisible = miniStreamingArtistsSectionVisible,
                     onlineConfigured = miniStreamingClient.isConfigured(),
                     currentLocalTrackId = playbackController.currentTrackId
                         ?.takeUnless { it.startsWith(MINI_STREAMING_PLAYBACK_PREFIX) },
@@ -4183,6 +4321,7 @@ private fun SearchPage(
     musicResults: List<TrackItem>,
     onlineTracksLoading: Boolean,
     onlineArtistsLoading: Boolean,
+    onlineArtistsVisible: Boolean,
     onlineConfigured: Boolean,
     currentLocalTrackId: String?,
     currentOnlineTrackId: String?,
@@ -4204,10 +4343,10 @@ private fun SearchPage(
     val showLocalDiscoverySections = !hasQuery
     val hasLocalDiscoveryResults = localPlaylistResults.isNotEmpty() || localArtistResults.isNotEmpty()
     val hasLocalResults = musicResults.isNotEmpty() || (showLocalDiscoverySections && hasLocalDiscoveryResults)
+    val hasOnlineArtistContent = onlineArtistsVisible && (onlineArtistResults.isNotEmpty() || onlineArtistsLoading)
     val hasOnlineContent = onlineTrackResults.isNotEmpty() ||
-        onlineArtistResults.isNotEmpty() ||
         onlineTracksLoading ||
-        onlineArtistsLoading
+        hasOnlineArtistContent
     val hasOnlineSections = onlineConfigured && hasQuery
     if (!hasLocalResults && !(hasOnlineSections && hasOnlineContent)) {
         EmptyListLabel(text = "No search results.")
@@ -4315,40 +4454,42 @@ private fun SearchPage(
                 }
             }
 
-            item(key = "search_artists_heading") {
-                SearchSectionHeading(text = "Artists")
-            }
+            if (onlineArtistsVisible) {
+                item(key = "search_artists_heading") {
+                    SearchSectionHeading(text = "Artists")
+                }
 
-            if (onlineArtistsLoading) {
-                item(key = "search_artists_loading") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                            color = LocalAccentColor.current
-                        )
-                    }
-                }
-            } else if (onlineArtistResults.isEmpty()) {
-                item(key = "search_artists_empty") {
-                    SearchSubtleEmptyLabel(text = "No artists found.")
-                }
-            } else {
-                item(key = "search_artists_row") {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 18.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(onlineArtistResults, key = { it.artistId }) { artist ->
-                            OnlineSearchArtistCard(
-                                artist = artist,
-                                onClick = { onOnlineArtistTap(artist) }
+                if (onlineArtistsLoading) {
+                    item(key = "search_artists_loading") {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 20.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp,
+                                color = LocalAccentColor.current
                             )
+                        }
+                    }
+                } else if (onlineArtistResults.isEmpty()) {
+                    item(key = "search_artists_empty") {
+                        SearchSubtleEmptyLabel(text = "No artists found.")
+                    }
+                } else {
+                    item(key = "search_artists_row") {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 18.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(onlineArtistResults, key = { it.artistId }) { artist ->
+                                OnlineSearchArtistCard(
+                                    artist = artist,
+                                    onClick = { onOnlineArtistTap(artist) }
+                                )
+                            }
                         }
                     }
                 }
@@ -5791,7 +5932,9 @@ private fun SettingsPage(
     storageRootPath: String,
     libraryTrackCount: Int,
     onSettingsChange: (SonoraAppSettings) -> Unit,
-    onOpenGithub: () -> Unit
+    onOpenGithub: () -> Unit,
+    onExportBackup: () -> Unit,
+    onImportBackup: () -> Unit
 ) {
     val selectedTrackGap = nearestTrackGapSecondsOption(settings.trackGapSeconds)
     val selectedMaxStorage = nearestMaxStorageOptionMb(settings.maxStorageMb)
@@ -5949,6 +6092,25 @@ private fun SettingsPage(
                 SettingsInfoRow(
                     title = "Storage path",
                     value = storageRootPath
+                )
+            }
+        }
+
+        item {
+            SettingsSectionHeading(text = "Backup")
+        }
+        item {
+            SettingsCard {
+                SettingsLinkRow(
+                    title = "Export backup",
+                    value = "Create .sonoraarc archive",
+                    onClick = onExportBackup
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsLinkRow(
+                    title = "Import backup",
+                    value = "Restore songs, playlists, favorites",
+                    onClick = onImportBackup
                 )
             }
         }
