@@ -7,6 +7,8 @@ import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
 
 class TrackStore(private val context: Context) {
@@ -108,6 +110,83 @@ class TrackStore(private val context: Context) {
         return ImportResult(added = added, failed = failed)
     }
 
+    fun importRemoteTrack(urlString: String, suggestedName: String, artworkUrl: String? = null): TrackItem? {
+        if (urlString.isBlank()) {
+            return null
+        }
+
+        val fileExtension = sanitizeExtension(
+            suggestedName.substringAfterLast('.', urlString.substringAfterLast('.', "mp3"))
+        )
+        val outputFile = File(
+            musicDir,
+            "${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.$fileExtension"
+        )
+
+        val copied = downloadRemoteFile(
+            urlString = urlString,
+            outputFile = outputFile,
+            connectTimeoutMs = 20_000,
+            readTimeoutMs = 300_000
+        )
+
+        if (!copied || !outputFile.exists()) {
+            if (outputFile.exists()) {
+                outputFile.delete()
+            }
+            return null
+        }
+
+        val metadata = readMetadata(outputFile, suggestedName.ifBlank { "Track_${System.currentTimeMillis()}" })
+        val importedArtworkPath = metadata.artworkPath ?: importRemoteArtwork(
+            urlString = artworkUrl.orEmpty(),
+            suggestedName = suggestedName.substringBeforeLast('.', suggestedName).ifBlank { "cover" } + ".jpg"
+        )
+        val imported = TrackItem(
+            id = UUID.randomUUID().toString(),
+            title = metadata.title,
+            artist = metadata.artist,
+            durationMs = metadata.durationMs,
+            filePath = outputFile.absolutePath,
+            artworkPath = importedArtworkPath,
+            addedAt = System.currentTimeMillis(),
+            isFavorite = false
+        )
+
+        val current = loadTracks().toMutableList()
+        current.add(0, imported)
+        saveTracks(current)
+        return imported
+    }
+
+    fun importRemoteArtwork(urlString: String, suggestedName: String = "cover.jpg"): String? {
+        if (urlString.isBlank()) {
+            return null
+        }
+
+        val fileExtension = sanitizeExtension(
+            suggestedName.substringAfterLast('.', urlString.substringAfterLast('.', "jpg"))
+        )
+        val outputFile = File(
+            artworkDir,
+            "art_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.$fileExtension"
+        )
+
+        val copied = downloadRemoteFile(
+            urlString = urlString,
+            outputFile = outputFile,
+            connectTimeoutMs = 15_000,
+            readTimeoutMs = 120_000
+        )
+        if (!copied || !outputFile.exists()) {
+            if (outputFile.exists()) {
+                outputFile.delete()
+            }
+            return null
+        }
+        return outputFile.absolutePath
+    }
+
     fun deleteTrackFiles(track: TrackItem): Boolean {
         var deletedAny = false
         var failed = false
@@ -192,6 +271,35 @@ class TrackStore(private val context: Context) {
             }
             cursor.getString(index)
         }
+    }
+
+    private fun downloadRemoteFile(
+        urlString: String,
+        outputFile: File,
+        connectTimeoutMs: Int,
+        readTimeoutMs: Int
+    ): Boolean {
+        return runCatching {
+            val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                instanceFollowRedirects = true
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+            }
+            connection.connect()
+            if (connection.responseCode !in 200..299) {
+                connection.disconnect()
+                return@runCatching false
+            }
+            connection.inputStream.use { input ->
+                outputFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            connection.disconnect()
+            true
+        }.getOrDefault(false)
     }
 
     private fun readMetadata(file: File, fallbackName: String): TrackMetadata {

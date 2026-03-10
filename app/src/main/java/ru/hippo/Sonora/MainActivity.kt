@@ -9,7 +9,10 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -100,6 +103,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -153,6 +157,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.nio.charset.StandardCharsets
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.cos
@@ -174,6 +179,9 @@ import ru.hippo.Sonora.music.PlaybackController
 import ru.hippo.Sonora.music.PlaybackHistoryStore
 import ru.hippo.Sonora.music.PlaylistStore
 import ru.hippo.Sonora.music.RepeatMode
+import ru.hippo.Sonora.music.SharedPlaylistEntry
+import ru.hippo.Sonora.music.SharedPlaylistStore
+import ru.hippo.Sonora.music.SharedPlaylistTrackEntry
 import ru.hippo.Sonora.music.SonoraBackupArchive
 import ru.hippo.Sonora.music.SonoraBackupSettings
 import ru.hippo.Sonora.music.TrackAnalytics
@@ -191,6 +199,7 @@ import ru.hippo.Sonora.ui.theme.SonoraTabInactiveLight
 import ru.hippo.Sonora.ui.theme.SonoraTheme
 
 class MainActivity : ComponentActivity() {
+    private val incomingSharedPlaylistUrlState = mutableStateOf<String?>(null)
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
@@ -199,6 +208,7 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        incomingSharedPlaylistUrlState.value = intent?.dataString
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
@@ -212,9 +222,15 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SonoraTheme(dynamicColor = false) {
-                SonoraApp()
+                SonoraApp(incomingSharedPlaylistUrlState)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingSharedPlaylistUrlState.value = intent.dataString
     }
 }
 
@@ -278,7 +294,9 @@ private data class SonoraAppSettings(
     val accentHex: String = DEFAULT_ACCENT_HEX,
     val preservePlayerModes: Boolean = true,
     val trackGapSeconds: Float = 0f,
-    val maxStorageMb: Int = -1
+    val maxStorageMb: Int = -1,
+    val cacheOnlinePlaylistTracks: Boolean = false,
+    val onlinePlaylistCacheMaxMb: Int = 1024
 )
 
 private data class PlaybackSessionSnapshot(
@@ -314,7 +332,9 @@ private class SonoraSettingsStore(context: Context) {
             accentHex = accentHex,
             preservePlayerModes = prefs.getBoolean(KEY_PRESERVE_PLAYER_MODES, true),
             trackGapSeconds = nearestTrackGapSecondsOption(prefs.getFloat(KEY_TRACK_GAP, 0f)),
-            maxStorageMb = nearestMaxStorageOptionMb(prefs.getInt(KEY_MAX_STORAGE_MB, -1))
+            maxStorageMb = nearestMaxStorageOptionMb(prefs.getInt(KEY_MAX_STORAGE_MB, -1)),
+            cacheOnlinePlaylistTracks = prefs.getBoolean(KEY_CACHE_ONLINE_PLAYLIST_TRACKS, false),
+            onlinePlaylistCacheMaxMb = nearestMaxStorageOptionMb(prefs.getInt(KEY_ONLINE_PLAYLIST_CACHE_MAX_MB, 1024))
         )
     }
 
@@ -327,6 +347,8 @@ private class SonoraSettingsStore(context: Context) {
             .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
             .putFloat(KEY_TRACK_GAP, nearestTrackGapSecondsOption(settings.trackGapSeconds))
             .putInt(KEY_MAX_STORAGE_MB, nearestMaxStorageOptionMb(settings.maxStorageMb))
+            .putBoolean(KEY_CACHE_ONLINE_PLAYLIST_TRACKS, settings.cacheOnlinePlaylistTracks)
+            .putInt(KEY_ONLINE_PLAYLIST_CACHE_MAX_MB, nearestMaxStorageOptionMb(settings.onlinePlaylistCacheMaxMb))
             .apply()
     }
 
@@ -429,6 +451,8 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_PRESERVE_PLAYER_MODES = "preserve_player_modes"
         const val KEY_TRACK_GAP = "track_gap_seconds"
         const val KEY_MAX_STORAGE_MB = "max_storage_mb"
+        const val KEY_CACHE_ONLINE_PLAYLIST_TRACKS = "cache_online_playlist_tracks"
+        const val KEY_ONLINE_PLAYLIST_CACHE_MAX_MB = "online_playlist_cache_max_mb"
         const val KEY_SESSION_QUEUE_JSON = "playback_session_queue_json"
         const val KEY_SESSION_TRACK_ID = "playback_session_track_id"
         const val KEY_SESSION_POSITION_MS = "playback_session_position_ms"
@@ -447,6 +471,41 @@ private const val MINI_STREAMING_ARTISTS_SEARCH_LIMIT = 10
 private const val MINI_STREAMING_ARTIST_PAGE_SIZE = 60
 private val TrackGapSecondsOptions = listOf(0f, 0.5f, 1f, 1.5f, 2f, 3f, 5f, 8f)
 private val MaxStorageMbOptions = listOf(-1, 512, 1024, 2048, 3072, 4096, 6144, 8192)
+
+private fun sanitizeSharedPlaylistEntry(entry: SharedPlaylistEntry): SharedPlaylistEntry {
+    return entry.copy(
+        cachedCoverPath = entry.cachedCoverPath?.takeIf { path ->
+            path.isNotBlank() && java.io.File(path).exists()
+        },
+        tracks = entry.tracks.map { track ->
+            track.copy(
+                cachedArtworkPath = track.cachedArtworkPath?.takeIf { path ->
+                    path.isNotBlank() && java.io.File(path).exists()
+                },
+                cachedFilePath = track.cachedFilePath?.takeIf { path ->
+                    path.isNotBlank() && java.io.File(path).exists()
+                }
+            )
+        }
+    )
+}
+
+private fun sharedPlaylistSubtitle(entry: SharedPlaylistEntry, cacheAudioEnabled: Boolean): String {
+    val total = entry.tracks.size
+    if (!cacheAudioEnabled) {
+        return "Online playlist • Streaming"
+    }
+    val cachedCount = entry.tracks.count { track ->
+        val path = track.cachedFilePath
+        !path.isNullOrBlank() && File(path).exists()
+    }
+    return when {
+        total <= 0 -> "Online playlist"
+        cachedCount >= total -> "Online playlist • Cached"
+        cachedCount > 0 -> "Online playlist • Cached $cachedCount/$total"
+        else -> "Online playlist • 0/$total cached"
+    }
+}
 
 private fun buildBackupArchiveFileName(timestampMs: Long = System.currentTimeMillis()): String {
     val formatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
@@ -497,7 +556,9 @@ private data class PlaylistUiItem(
     val subtitle: String,
     val customCoverPath: String?,
     val isLovely: Boolean,
-    val isUser: Boolean
+    val isUser: Boolean,
+    val isSharedOnline: Boolean = false,
+    val shareUrl: String? = null
 )
 
 private data class HomeAlbumUiItem(
@@ -546,10 +607,11 @@ private val LocalAccentColor = staticCompositionLocalOf {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SonoraApp() {
+private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
     val trackStore = remember(context) { TrackStore(context) }
     val playlistStore = remember(context) { PlaylistStore(context) }
+    val sharedPlaylistStore = remember(context) { SharedPlaylistStore(context) }
     val analyticsStore = remember(context) { TrackAnalyticsStore(context) }
     val playbackHistoryStore = remember(context) { PlaybackHistoryStore(context) }
     val settingsStore = remember(context) { SonoraSettingsStore(context) }
@@ -567,8 +629,14 @@ private fun SonoraApp() {
 
     var tracks by remember { mutableStateOf(trackStore.loadTracks()) }
     var userPlaylists by remember { mutableStateOf(playlistStore.loadPlaylists()) }
+    var likedSharedPlaylists by remember {
+        mutableStateOf(sharedPlaylistStore.loadPlaylists().map(::sanitizeSharedPlaylistEntry))
+    }
     var appSettings by remember { mutableStateOf(settingsStore.load()) }
     var storageUsageBytes by remember { mutableLongStateOf(0L) }
+    var sharedPlaylistAudioCacheUsageBytes by remember {
+        mutableLongStateOf(sharedPlaylistStore.audioCacheUsageBytes())
+    }
     var miniStreamingInstalledTrackMap by remember {
         mutableStateOf(settingsStore.loadMiniStreamingInstalledTrackMap())
     }
@@ -586,6 +654,7 @@ private fun SonoraApp() {
     var showPlaylistsListPage by rememberSaveable { mutableStateOf(false) }
 
     var openedPlaylistID by rememberSaveable { mutableStateOf<String?>(null) }
+    var openedTransientSharedPlaylist by remember { mutableStateOf<SharedPlaylistEntry?>(null) }
     var openedHomeAlbumArtistKey by rememberSaveable { mutableStateOf<String?>(null) }
     var playlistCreateStep by rememberSaveable { mutableStateOf<PlaylistCreateStep?>(null) }
     var playlistCreateName by rememberSaveable { mutableStateOf("") }
@@ -628,6 +697,35 @@ private fun SonoraApp() {
     var openedMiniStreamingArtistHasMore by remember { mutableStateOf(false) }
     var openedMiniStreamingArtistRequestedLimit by remember { mutableIntStateOf(MINI_STREAMING_ARTIST_PAGE_SIZE) }
     var openedMiniStreamingArtistRequestToken by remember { mutableIntStateOf(0) }
+    var sharedPlaylistOpening by remember { mutableStateOf(false) }
+    var sharedPlaylistOpeningMessage by remember { mutableStateOf("Loading tracks from server...") }
+    var sharedPlaylistUploading by remember { mutableStateOf(false) }
+    var sharedPlaylistUploadingMessage by remember { mutableStateOf("Uploading tracks to server...") }
+    var sharedPlaylistImporting by remember { mutableStateOf(false) }
+    var sharedPlaylistImportingMessage by remember { mutableStateOf("Saving tracks to library...") }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val applySharedPlaylistProgressUpdate: (SharedPlaylistEntry) -> Unit = { updatedEntry ->
+        val sanitized = sanitizeSharedPlaylistEntry(updatedEntry)
+        likedSharedPlaylists = buildList {
+            var replaced = false
+            likedSharedPlaylists.forEach { existing ->
+                if (existing.remoteId == sanitized.remoteId) {
+                    add(sanitized)
+                    replaced = true
+                } else {
+                    add(existing)
+                }
+            }
+            if (!replaced) {
+                add(0, sanitized)
+            }
+        }
+        if (openedTransientSharedPlaylist?.remoteId == sanitized.remoteId ||
+            openedPlaylistID == sanitized.localId) {
+            openedTransientSharedPlaylist = sanitized
+        }
+        sharedPlaylistAudioCacheUsageBytes = sharedPlaylistStore.audioCacheUsageBytes()
+    }
 
     var analyticsVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
@@ -677,6 +775,75 @@ private fun SonoraApp() {
     val historyListState = rememberLazyListState()
     val playlistsBrowseListState = rememberLazyListState()
     val playlistDetailListState = rememberLazyListState()
+
+    LaunchedEffect(incomingSharedPlaylistUrlState.value) {
+        val url = incomingSharedPlaylistUrlState.value
+        if (url.isNullOrBlank()) {
+            return@LaunchedEffect
+        }
+        val cachedSharedPlaylist = extractSharedPlaylistRemoteId(url)?.let { remoteId ->
+            likedSharedPlaylists.firstOrNull { it.remoteId == remoteId }
+        }
+        sharedPlaylistOpeningMessage = "Loading tracks from server..."
+        sharedPlaylistOpening = true
+        val fetched = withContext(Dispatchers.IO) {
+            fetchSharedPlaylistFromDeepLink(
+                url,
+                BuildConfig.BACKEND_BASE_URL.ifBlank { "https://api.corebrew.ru" },
+                cachedSharedPlaylist
+            )
+        }
+        sharedPlaylistOpening = false
+        incomingSharedPlaylistUrlState.value = null
+        if (fetched == null) {
+            snackbarHostState.showSnackbar("Could not open shared playlist")
+        } else {
+            val hydrated = if (
+                cachedSharedPlaylist != null &&
+                fetched.remoteId == cachedSharedPlaylist.remoteId &&
+                fetched.contentSha256.isNotBlank() &&
+                fetched.contentSha256 != cachedSharedPlaylist.contentSha256
+            ) {
+                withContext(Dispatchers.IO) {
+                    val fresh = fetched.copy(
+                        cachedCoverPath = null,
+                        tracks = fetched.tracks.map {
+                            it.copy(
+                                cachedArtworkPath = null,
+                                cachedFilePath = null
+                            )
+                        }
+                    )
+                    sharedPlaylistStore.upsert(fresh)
+                    sharedPlaylistStore.cacheAssets(
+                        fresh,
+                        cacheAudio = appSettings.cacheOnlinePlaylistTracks,
+                        audioLimitBytes = if (appSettings.onlinePlaylistCacheMaxMb > 0) {
+                            appSettings.onlinePlaylistCacheMaxMb.toLong() * 1_048_576L
+                        } else {
+                            Long.MAX_VALUE
+                        },
+                        forceRefresh = true,
+                        onProgress = { partial ->
+                            mainHandler.post {
+                                applySharedPlaylistProgressUpdate(partial)
+                            }
+                        }
+                    )
+                }
+            } else {
+                fetched
+            }
+            if (cachedSharedPlaylist != null) {
+                likedSharedPlaylists = sharedPlaylistStore.loadPlaylists().map(::sanitizeSharedPlaylistEntry)
+                sharedPlaylistAudioCacheUsageBytes = sharedPlaylistStore.audioCacheUsageBytes()
+            }
+            openedTransientSharedPlaylist = hydrated
+            openedPlaylistID = hydrated.localId
+            showPlaylistsListPage = true
+            selectedTab = SonoraTab.Playlists
+        }
+    }
 
     val density = LocalDensity.current
     val revealThreshold = remember(density) { with(density) { 62.dp.toPx() } }
@@ -1015,7 +1182,7 @@ private fun SonoraApp() {
         buildLovelyTrackIDs(tracks, analyticsByID)
     }
 
-    val allPlaylists = remember(userPlaylists, lovelyTrackIDs) {
+    val allPlaylists = remember(userPlaylists, lovelyTrackIDs, likedSharedPlaylists, appSettings.cacheOnlinePlaylistTracks) {
         buildList {
             if (lovelyTrackIDs.isNotEmpty()) {
                 add(
@@ -1041,6 +1208,22 @@ private fun SonoraApp() {
                         customCoverPath = entry.customCoverPath,
                         isLovely = false,
                         isUser = true
+                    )
+                )
+            }
+
+            likedSharedPlaylists.forEach { entry ->
+                add(
+                    PlaylistUiItem(
+                        id = entry.localId,
+                        name = entry.name,
+                        trackIds = entry.tracks.mapIndexed { index, _ -> "shared:${entry.remoteId}:$index" },
+                        subtitle = sharedPlaylistSubtitle(entry, appSettings.cacheOnlinePlaylistTracks),
+                        customCoverPath = entry.cachedCoverPath ?: entry.coverUrl,
+                        isLovely = false,
+                        isUser = false,
+                        isSharedOnline = true,
+                        shareUrl = entry.shareUrl
                     )
                 )
             }
@@ -1189,6 +1372,15 @@ private fun SonoraApp() {
     val openedPlaylist = remember(openedPlaylistID, allPlaylists) {
         allPlaylists.firstOrNull { it.id == openedPlaylistID }
     }
+    val openedSharedPlaylist = remember(openedPlaylistID, likedSharedPlaylists, openedTransientSharedPlaylist) {
+        val currentID = openedPlaylistID
+        if (currentID.isNullOrBlank()) {
+            null
+        } else {
+            likedSharedPlaylists.firstOrNull { it.localId == currentID }
+                ?: openedTransientSharedPlaylist?.takeIf { it.localId == currentID }
+        }
+    }
     val openedPlaylistTracks = remember(openedPlaylist, trackByID) {
         openedPlaylist?.trackIds?.mapNotNull { trackByID[it] } ?: emptyList()
     }
@@ -1198,8 +1390,20 @@ private fun SonoraApp() {
     val openedHomeAlbumTracks = remember(openedHomeAlbum, trackByID) {
         openedHomeAlbum?.trackIds?.mapNotNull { trackByID[it] } ?: emptyList()
     }
-    val openedDetailPlaylist = remember(openedPlaylist, openedHomeAlbum) {
-        openedPlaylist ?: openedHomeAlbum?.let {
+    val openedDetailPlaylist = remember(openedPlaylist, openedSharedPlaylist, openedHomeAlbum, appSettings.cacheOnlinePlaylistTracks) {
+        openedPlaylist ?: openedSharedPlaylist?.let {
+            PlaylistUiItem(
+                id = it.localId,
+                name = it.name,
+                trackIds = it.tracks.mapIndexed { index, _ -> "shared:${it.remoteId}:$index" },
+                subtitle = sharedPlaylistSubtitle(it, appSettings.cacheOnlinePlaylistTracks),
+                customCoverPath = it.cachedCoverPath ?: it.coverUrl,
+                isLovely = false,
+                isUser = false,
+                isSharedOnline = true,
+                shareUrl = it.shareUrl
+            )
+        } ?: openedHomeAlbum?.let {
             PlaylistUiItem(
                 id = "album:${it.artistKey}",
                 name = it.title,
@@ -1211,8 +1415,22 @@ private fun SonoraApp() {
             )
         }
     }
-    val openedDetailTracks = remember(openedPlaylist, openedPlaylistTracks, openedHomeAlbumTracks) {
-        if (openedPlaylist != null) {
+    val openedDetailTracks = remember(openedPlaylist, openedSharedPlaylist, openedPlaylistTracks, openedHomeAlbumTracks) {
+        if (openedPlaylist?.isSharedOnline == true || openedSharedPlaylist != null) {
+            val shared = openedSharedPlaylist ?: return@remember emptyList()
+            shared.tracks.mapIndexed { index, track ->
+                TrackItem(
+                    id = "shared:${shared.remoteId}:$index",
+                    title = track.title,
+                    artist = track.artist,
+                    durationMs = track.durationMs,
+                    filePath = track.cachedFilePath ?: track.fileUrl.orEmpty(),
+                    artworkPath = track.cachedArtworkPath ?: track.artworkUrl,
+                    addedAt = shared.createdAt,
+                    isFavorite = false
+                )
+            }
+        } else if (openedPlaylist != null) {
             openedPlaylistTracks
         } else {
             openedHomeAlbumTracks
@@ -1235,6 +1453,160 @@ private fun SonoraApp() {
 
     fun reloadPlaylists() {
         userPlaylists = playlistStore.loadPlaylists()
+    }
+
+    fun reloadSharedPlaylists() {
+        val reloadedSharedPlaylists = sharedPlaylistStore.loadPlaylists().map(::sanitizeSharedPlaylistEntry)
+        likedSharedPlaylists = reloadedSharedPlaylists
+        sharedPlaylistAudioCacheUsageBytes = sharedPlaylistStore.audioCacheUsageBytes()
+        openedTransientSharedPlaylist = openedTransientSharedPlaylist?.let { transient ->
+            reloadedSharedPlaylists.firstOrNull { it.remoteId == transient.remoteId || it.localId == transient.localId }
+                ?: transient
+        }
+    }
+
+    val sharedPlaylistCacheRefreshKeys = remember(likedSharedPlaylists) {
+        likedSharedPlaylists.map { "${it.remoteId}:${it.contentSha256}" }
+    }
+
+    LaunchedEffect(
+        appSettings.cacheOnlinePlaylistTracks,
+        appSettings.onlinePlaylistCacheMaxMb,
+        sharedPlaylistCacheRefreshKeys
+    ) {
+        withContext(Dispatchers.IO) {
+            if (!appSettings.cacheOnlinePlaylistTracks) {
+                sharedPlaylistStore.trimAudioCache(0L)
+                return@withContext
+            }
+            if (likedSharedPlaylists.isEmpty()) {
+                return@withContext
+            }
+            val limitBytes = if (appSettings.onlinePlaylistCacheMaxMb > 0) {
+                appSettings.onlinePlaylistCacheMaxMb.toLong() * 1_048_576L
+            } else {
+                Long.MAX_VALUE
+            }
+            likedSharedPlaylists.forEach { entry ->
+                sharedPlaylistStore.cacheAssets(
+                    entry,
+                    cacheAudio = true,
+                    audioLimitBytes = limitBytes,
+                    onProgress = { partial ->
+                        mainHandler.post {
+                            applySharedPlaylistProgressUpdate(partial)
+                        }
+                    }
+                )
+            }
+        }
+        reloadSharedPlaylists()
+    }
+
+    fun openSharedPlaylist(entry: SharedPlaylistEntry, transient: Boolean) {
+        if (transient) {
+            openedTransientSharedPlaylist = entry
+        }
+        openedPlaylistID = entry.localId
+        showPlaylistsListPage = true
+        selectedTab = SonoraTab.Playlists
+    }
+
+    fun sharedTrackMatchesLocal(track: SharedPlaylistTrackEntry, local: TrackItem): Boolean {
+        fun normalize(value: String): String {
+            return value.trim().lowercase().replace(Regex("\\s+"), " ")
+        }
+
+        fun artistTokens(value: String): List<String> {
+            val normalized = normalize(value)
+            if (normalized.isBlank()) {
+                return emptyList()
+            }
+            return normalized
+                .split(",", "/", "&", ";", "|")
+                .map { it.trim() }
+                .filter { it.length > 1 }
+                .distinct()
+        }
+
+        val sharedTitle = normalize(track.title)
+        val localTitle = normalize(local.title)
+        if (sharedTitle.isBlank() || sharedTitle != localTitle) {
+            return false
+        }
+
+        val sharedArtist = normalize(track.artist)
+        val localArtist = normalize(local.artist)
+        if (sharedArtist.isBlank() || localArtist.isBlank()) {
+            return false
+        }
+        if (localArtist.contains(sharedArtist) || sharedArtist.contains(localArtist)) {
+            return track.durationMs <= 0L || local.durationMs <= 0L ||
+                kotlin.math.abs(track.durationMs - local.durationMs) <= 3_000L
+        }
+
+        val tokens = artistTokens(track.artist)
+        if (!tokens.any { token -> localArtist.contains(token) }) {
+            return false
+        }
+        return track.durationMs <= 0L || local.durationMs <= 0L ||
+            kotlin.math.abs(track.durationMs - local.durationMs) <= 3_000L
+    }
+
+    fun importSharedPlaylistLocally(
+        entry: SharedPlaylistEntry,
+        localTracks: List<TrackItem>,
+        onProgress: (String) -> Unit = {}
+    ): Pair<List<String>, String?> {
+        val importedIds = mutableListOf<String>()
+        val downloadedCoverPath = entry.coverUrl
+            ?.takeIf { it.isNotBlank() }
+            ?.let { coverUrl ->
+                onProgress("Downloading cover...")
+                trackStore.importRemoteArtwork(
+                    urlString = coverUrl,
+                    suggestedName = "${entry.remoteId.ifBlank { "playlist" }}_cover.jpg"
+                )
+            }
+        entry.tracks.forEachIndexed { index, sharedTrack ->
+            val existing = localTracks.firstOrNull { local -> sharedTrackMatchesLocal(sharedTrack, local) }?.id
+            if (!existing.isNullOrBlank()) {
+                importedIds += existing
+                return@forEachIndexed
+            }
+            val fileUrl = sharedTrack.fileUrl
+            if (fileUrl.isNullOrBlank()) {
+                return@forEachIndexed
+            }
+            onProgress("Downloading track ${index + 1}/${entry.tracks.size}...")
+            val suggestedName = buildString {
+                if (sharedTrack.artist.isNotBlank()) {
+                    append(sharedTrack.artist)
+                    append(" - ")
+                }
+                append(sharedTrack.title.ifBlank { "Track ${index + 1}" })
+                append(".mp3")
+            }
+            val imported = trackStore.importRemoteTrack(fileUrl, suggestedName, sharedTrack.artworkUrl)
+            if (imported != null) {
+                importedIds += imported.id
+            }
+        }
+        return importedIds.distinct() to downloadedCoverPath
+    }
+
+    fun shareText(text: String) {
+        if (text.isBlank()) {
+            return
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            context.startActivity(Intent.createChooser(intent, "Share Playlist").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
     }
 
     fun miniStreamingPlaybackIdForTrack(trackId: String): String {
@@ -2195,12 +2567,8 @@ private fun SonoraApp() {
 
     val title = when {
         isTrackSelectionMode -> "$selectedTrackCount Selected"
-        inMiniStreamingArtistDetail -> if (showCompactPlaylistTitle) {
-            openedMiniStreamingArtist?.name ?: "Artist"
-        } else {
-            ""
-        }
-        inPlaylistDetail -> if (showCompactPlaylistTitle) (openedDetailPlaylist?.name ?: "Playlist") else ""
+        inMiniStreamingArtistDetail -> ""
+        inPlaylistDetail -> ""
         showHistoryPage -> "History"
         showSettingsPage -> "Settings"
         showFavoritesPage -> "Favorites"
@@ -2483,7 +2851,7 @@ private fun SonoraApp() {
                                         )
                                     }
 
-                                    inPlaylistDetail && openedDetailPlaylist?.isUser == true -> {
+                                    inPlaylistDetail && (openedDetailPlaylist?.isUser == true || openedDetailPlaylist?.isSharedOnline == true) -> {
                                         AppIconButton(
                                             iconRes = R.drawable.ic_global_ellipsis,
                                             contentDescription = "Playlist options",
@@ -2953,6 +3321,7 @@ private fun SonoraApp() {
                     SettingsPage(
                         settings = appSettings,
                         storageUsedBytes = storageUsageBytes,
+                        onlinePlaylistCacheUsedBytes = sharedPlaylistAudioCacheUsageBytes,
                         appVersionLabel = appVersionLabel,
                         githubProjectLabel = githubProjectLabel,
                         storageRootPath = storageRootPath,
@@ -2960,6 +3329,14 @@ private fun SonoraApp() {
                         onSettingsChange = { updated ->
                             appSettings = updated
                             settingsStore.save(updated)
+                        },
+                        onClearOnlinePlaylistCache = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    sharedPlaylistStore.trimAudioCache(0L)
+                                }
+                                reloadSharedPlaylists()
+                            }
                         },
                         onOpenGithub = {
                             openExternalUrl(context, githubProjectURL)
@@ -3436,12 +3813,12 @@ private fun SonoraApp() {
         }
     }
 
-    if (showPlaylistOptionsDialog && openedPlaylist?.isUser == true) {
+    if (showPlaylistOptionsDialog && (openedDetailPlaylist?.isUser == true || openedDetailPlaylist?.isSharedOnline == true)) {
         AlertDialog(
             onDismissRequest = { showPlaylistOptionsDialog = false },
             title = {
                 Text(
-                    text = openedPlaylist.name,
+                    text = openedDetailPlaylist?.name ?: "Playlist",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -3451,46 +3828,171 @@ private fun SonoraApp() {
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    AccentTextButton(
-                        onClick = {
-                            addTracksTargetPlaylistID = openedPlaylist.id
-                            addTracksSelectedIDs = emptySet()
-                            showPlaylistOptionsDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Add Music")
-                    }
-                    AccentTextButton(
-                        onClick = {
-                            coverTargetPlaylistID = openedPlaylist.id
-                            showPlaylistOptionsDialog = false
-                            changePlaylistCoverLauncher.launch("image/*")
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Change Cover")
-                    }
-                    AccentTextButton(
-                        onClick = {
-                            renamePlaylistDraft = openedPlaylist.name
-                            showRenamePlaylistDialog = true
-                            showPlaylistOptionsDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Rename Playlist")
-                    }
-                    AccentTextButton(
-                        onClick = {
-                            playlistStore.deletePlaylist(openedPlaylist.id)
-                            reloadPlaylists()
-                            openedPlaylistID = null
-                            showPlaylistOptionsDialog = false
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Delete Playlist")
+                    if (openedDetailPlaylist?.isSharedOnline == true) {
+                        val sharedEntry = openedSharedPlaylist
+                        if (sharedEntry != null) {
+                            val isLiked = likedSharedPlaylists.any { it.remoteId == sharedEntry.remoteId }
+                            AccentTextButton(
+                                onClick = {
+                                    if (isLiked) {
+                                        openedTransientSharedPlaylist = sharedEntry
+                                        sharedPlaylistStore.removeByRemoteId(sharedEntry.remoteId)
+                                        reloadSharedPlaylists()
+                                    } else {
+                                        scope.launch {
+                                            val cachedEntry = withContext(Dispatchers.IO) {
+                                                sharedPlaylistStore.upsert(sharedEntry)
+                                                sharedPlaylistStore.cacheAssets(
+                                                    sharedEntry,
+                                                    cacheAudio = appSettings.cacheOnlinePlaylistTracks,
+                                                    audioLimitBytes = if (appSettings.onlinePlaylistCacheMaxMb > 0) {
+                                                        appSettings.onlinePlaylistCacheMaxMb.toLong() * 1_048_576L
+                                                    } else {
+                                                        Long.MAX_VALUE
+                                                    },
+                                                    onProgress = { partial ->
+                                                        mainHandler.post {
+                                                            applySharedPlaylistProgressUpdate(partial)
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                            reloadSharedPlaylists()
+                                            openedTransientSharedPlaylist = cachedEntry
+                                        }
+                                    }
+                                    showPlaylistOptionsDialog = false
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(if (isLiked) "Remove from Collections" else "Add to Collections")
+                            }
+                            AccentTextButton(
+                                onClick = {
+                                    showPlaylistOptionsDialog = false
+                                    scope.launch {
+                                        sharedPlaylistImportingMessage = "Saving tracks to library..."
+                                        sharedPlaylistImporting = true
+                                        val localTracksSnapshot = tracks
+                                        val (importedTrackIds, downloadedCoverPath) = withContext(Dispatchers.IO) {
+                                            importSharedPlaylistLocally(sharedEntry, localTracksSnapshot) { message ->
+                                                mainHandler.post {
+                                                    sharedPlaylistImportingMessage = message
+                                                }
+                                            }
+                                        }
+                                        sharedPlaylistImporting = false
+                                        if (importedTrackIds.isEmpty()) {
+                                            snackbarHostState.showSnackbar("Could not save playlist to library")
+                                        } else {
+                                            val created = playlistStore.createPlaylist(sharedEntry.name.trim())
+                                            if (created == null) {
+                                                snackbarHostState.showSnackbar("Could not save playlist to library")
+                                            } else {
+                                                playlistStore.replaceTrackIds(created.id, importedTrackIds)
+                                                if (!downloadedCoverPath.isNullOrBlank()) {
+                                                    playlistStore.setCustomCover(created.id, Uri.fromFile(File(downloadedCoverPath)))
+                                                    runCatching { File(downloadedCoverPath).delete() }
+                                                }
+                                                tracks = trackStore.loadTracks()
+                                                reloadPlaylists()
+                                                openedPlaylistID = created.id
+                                                openedTransientSharedPlaylist = null
+                                                snackbarHostState.showSnackbar("Saved ${importedTrackIds.size} track(s) to library")
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Import to Library")
+                            }
+                            AccentTextButton(
+                                onClick = {
+                                    shareText(sharedEntry.shareUrl)
+                                    showPlaylistOptionsDialog = false
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Share Link")
+                            }
+                        }
+                    } else if (openedPlaylist?.isUser == true) {
+                        AccentTextButton(
+                            onClick = {
+                                addTracksTargetPlaylistID = openedPlaylist.id
+                                addTracksSelectedIDs = emptySet()
+                                showPlaylistOptionsDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Add Music")
+                        }
+                        AccentTextButton(
+                            onClick = {
+                                coverTargetPlaylistID = openedPlaylist.id
+                                showPlaylistOptionsDialog = false
+                                changePlaylistCoverLauncher.launch("image/*")
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Change Cover")
+                        }
+                        AccentTextButton(
+                            onClick = {
+                                renamePlaylistDraft = openedPlaylist.name
+                                showRenamePlaylistDialog = true
+                                showPlaylistOptionsDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Rename Playlist")
+                        }
+                        AccentTextButton(
+                            onClick = {
+                                val shareTarget = openedPlaylist ?: return@AccentTextButton
+                                val shareTracks = openedPlaylistTracks
+                                showPlaylistOptionsDialog = false
+                                scope.launch {
+                                    sharedPlaylistUploadingMessage = "Creating playlist..."
+                                    sharedPlaylistUploading = true
+                                    val shared = withContext(Dispatchers.IO) {
+                                        uploadSharedPlaylist(
+                                            baseUrl = BuildConfig.BACKEND_BASE_URL.ifBlank { "https://api.corebrew.ru" },
+                                            name = shareTarget.name,
+                                            coverPath = shareTarget.customCoverPath ?: shareTracks.firstOrNull()?.artworkPath,
+                                            tracks = shareTracks,
+                                            onProgress = { message ->
+                                                mainHandler.post {
+                                                    sharedPlaylistUploadingMessage = message
+                                                }
+                                            }
+                                        )
+                                    }
+                                    sharedPlaylistUploading = false
+                                    if (shared == null) {
+                                        snackbarHostState.showSnackbar("Could not share playlist")
+                                    } else {
+                                        shareText(shared.shareUrl)
+                                        snackbarHostState.showSnackbar("Playlist link ready")
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Share Playlist")
+                        }
+                        AccentTextButton(
+                            onClick = {
+                                playlistStore.deletePlaylist(openedPlaylist.id)
+                                reloadPlaylists()
+                                openedPlaylistID = null
+                                showPlaylistOptionsDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Delete Playlist")
+                        }
                     }
                 }
             },
@@ -3532,6 +4034,57 @@ private fun SonoraApp() {
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    if (sharedPlaylistOpening) {
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Opening Playlist") },
+            text = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(strokeWidth = 2.6.dp, modifier = Modifier.size(22.dp))
+                    Text(sharedPlaylistOpeningMessage)
+                }
+            },
+            confirmButton = { }
+        )
+    }
+
+    if (sharedPlaylistUploading) {
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Sharing Playlist") },
+            text = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(strokeWidth = 2.6.dp, modifier = Modifier.size(22.dp))
+                    Text(sharedPlaylistUploadingMessage)
+                }
+            },
+            confirmButton = { }
+        )
+    }
+
+    if (sharedPlaylistImporting) {
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Saving Playlist") },
+            text = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(strokeWidth = 2.6.dp, modifier = Modifier.size(22.dp))
+                    Text(sharedPlaylistImportingMessage)
+                }
+            },
+            confirmButton = { }
         )
     }
 
@@ -5927,17 +6480,20 @@ private fun HistoryTrackRow(
 private fun SettingsPage(
     settings: SonoraAppSettings,
     storageUsedBytes: Long,
+    onlinePlaylistCacheUsedBytes: Long,
     appVersionLabel: String,
     githubProjectLabel: String,
     storageRootPath: String,
     libraryTrackCount: Int,
     onSettingsChange: (SonoraAppSettings) -> Unit,
+    onClearOnlinePlaylistCache: () -> Unit,
     onOpenGithub: () -> Unit,
     onExportBackup: () -> Unit,
     onImportBackup: () -> Unit
 ) {
     val selectedTrackGap = nearestTrackGapSecondsOption(settings.trackGapSeconds)
     val selectedMaxStorage = nearestMaxStorageOptionMb(settings.maxStorageMb)
+    val selectedOnlinePlaylistCache = nearestMaxStorageOptionMb(settings.onlinePlaylistCacheMaxMb)
     val hasStorageLimit = selectedMaxStorage > 0
     val maxStorageBytes = if (hasStorageLimit) {
         selectedMaxStorage.toLong() * 1_048_576L
@@ -5946,6 +6502,17 @@ private fun SettingsPage(
     }
     val usedStorageLabel = remember(storageUsedBytes) { formatStorageSize(storageUsedBytes) }
     val overLimit = hasStorageLimit && storageUsedBytes > maxStorageBytes
+    val hasOnlinePlaylistCacheLimit = selectedOnlinePlaylistCache > 0
+    val onlinePlaylistCacheBytes = if (hasOnlinePlaylistCacheLimit) {
+        selectedOnlinePlaylistCache.toLong() * 1_048_576L
+    } else {
+        Long.MAX_VALUE
+    }
+    val usedOnlinePlaylistCacheLabel = remember(onlinePlaylistCacheUsedBytes) {
+        formatStorageSize(onlinePlaylistCacheUsedBytes)
+    }
+    val onlinePlaylistCacheOverLimit =
+        hasOnlinePlaylistCacheLimit && onlinePlaylistCacheUsedBytes > onlinePlaylistCacheBytes
     val accentHex = normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX
     val accentPreview = remember(accentHex) { resolveAccentColor(accentHex) }
     var showAccentColorDialog by rememberSaveable { mutableStateOf(false) }
@@ -6059,6 +6626,53 @@ private fun SettingsPage(
                     onCheckedChange = { enabled ->
                         onSettingsChange(settings.copy(preservePlayerModes = enabled))
                     }
+                )
+            }
+        }
+
+        item {
+            SettingsSectionHeading(text = "Cache")
+        }
+        item {
+            SettingsCard {
+                SettingsSwitchRow(
+                    title = "Cache tracks from online playlists",
+                    subtitle = "Keep liked shared playlists available offline",
+                    checked = settings.cacheOnlinePlaylistTracks,
+                    onCheckedChange = { enabled ->
+                        onSettingsChange(settings.copy(cacheOnlinePlaylistTracks = enabled))
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsInfoRow(
+                    title = "Used by online playlists",
+                    value = usedOnlinePlaylistCacheLabel,
+                    valueColor = if (onlinePlaylistCacheOverLimit) Color(0xFFD93025) else MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SettingsScrollableChoiceRow(
+                    title = "Max online cache space",
+                    subtitle = if (!settings.cacheOnlinePlaylistTracks) {
+                        "Caching is off"
+                    } else if (!hasOnlinePlaylistCacheLimit) {
+                        "No storage limit"
+                    } else if (onlinePlaylistCacheOverLimit) {
+                        "Current usage is above limit. Old cache will be evicted."
+                    } else {
+                        "Concrete storage presets"
+                    },
+                    options = MaxStorageMbOptions.map { formatMaxStorageOptionLabel(it) },
+                    selectedIndex = MaxStorageMbOptions.indexOf(selectedOnlinePlaylistCache).coerceAtLeast(0),
+                    onSelect = { index ->
+                        val selected = MaxStorageMbOptions.getOrElse(index) { selectedOnlinePlaylistCache }
+                        onSettingsChange(settings.copy(onlinePlaylistCacheMaxMb = selected))
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsLinkRow(
+                    title = "Clear online cache",
+                    value = "Delete",
+                    onClick = onClearOnlinePlaylistCache
                 )
             }
         }
@@ -7281,7 +7895,7 @@ private fun CollectionsPlaylistCard(
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = "${item.trackIds.size} tracks",
+            text = item.subtitle.ifBlank { "${item.trackIds.size} tracks" },
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Normal
@@ -7619,19 +8233,21 @@ private fun PlaylistDetailPage(
                                 )
                             )
                         }
-                        add(
-                            SwipeTrackAction(
-                                label = if (track.isFavorite) "Unfav" else "Fav",
-                                backgroundColor = if (track.isFavorite) {
-                                    Color(0xFF6A6A6A)
-                                } else {
-                                    Color(0xFFFF5966)
-                                },
-                                iconRes = if (track.isFavorite) R.drawable.heart_slash_fill else R.drawable.heart_fill,
-                                onAction = { onTrackSwipeFavorite(track) },
-                                fullSwipeEnabled = true
+                        if (!playlist.isSharedOnline) {
+                            add(
+                                SwipeTrackAction(
+                                    label = if (track.isFavorite) "Unfav" else "Fav",
+                                    backgroundColor = if (track.isFavorite) {
+                                        Color(0xFF6A6A6A)
+                                    } else {
+                                        Color(0xFFFF5966)
+                                    },
+                                    iconRes = if (track.isFavorite) R.drawable.heart_slash_fill else R.drawable.heart_fill,
+                                    onAction = { onTrackSwipeFavorite(track) },
+                                    fullSwipeEnabled = true
+                                )
                             )
-                        )
+                        }
                     }
                 }
             )
@@ -9952,6 +10568,344 @@ private fun resolveSettingsFontFamily(style: AppFontStyle): FontFamily? {
     }
 }
 
+private fun encodeImagePathToBase64(path: String?): Pair<String, String>? {
+    if (path.isNullOrBlank()) {
+        return null
+    }
+    return runCatching {
+        val bytes = if (path.startsWith("http://", ignoreCase = true) || path.startsWith("https://", ignoreCase = true)) {
+            val connection = (URL(path).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                instanceFollowRedirects = true
+                connectTimeout = 15_000
+                readTimeout = 20_000
+                setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+            }
+            connection.connect()
+            if (connection.responseCode !in 200..299) {
+                connection.disconnect()
+                return@runCatching null
+            }
+            val data = connection.inputStream.use { it.readBytes() }
+            connection.disconnect()
+            data
+        } else {
+            val file = File(path)
+            if (!file.exists() || !file.isFile) {
+                return@runCatching null
+            }
+            file.readBytes()
+        }
+        if (bytes.isEmpty()) {
+            null
+        } else {
+            val lowered = path.lowercase()
+            val mimeType = when {
+                lowered.endsWith(".png") -> "image/png"
+                lowered.endsWith(".webp") -> "image/webp"
+                else -> "image/jpeg"
+            }
+            mimeType to Base64.encodeToString(bytes, Base64.NO_WRAP)
+        }
+    }.getOrNull()
+}
+
+private fun encodeAudioFileToBase64(path: String?): Pair<String, String>? {
+    if (path.isNullOrBlank()) {
+        return null
+    }
+    return runCatching {
+        val file = File(path)
+        if (!file.exists() || !file.isFile) {
+            return@runCatching null
+        }
+        val extension = file.extension.lowercase().ifBlank { "mp3" }
+        val mimeType = when (extension) {
+            "m4a" -> "audio/mp4"
+            "aac" -> "audio/aac"
+            "wav" -> "audio/wav"
+            "ogg" -> "audio/ogg"
+            "flac" -> "audio/flac"
+            "opus" -> "audio/ogg"
+            "webm" -> "audio/webm"
+            else -> "audio/mpeg"
+        }
+        mimeType to Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+    }.getOrNull()
+}
+
+private fun guessAudioMimeType(path: String): String {
+    return when (File(path).extension.lowercase()) {
+        "m4a" -> "audio/mp4"
+        "aac" -> "audio/aac"
+        "wav" -> "audio/wav"
+        "ogg" -> "audio/ogg"
+        "flac" -> "audio/flac"
+        "opus" -> "audio/ogg"
+        "webm" -> "audio/webm"
+        else -> "audio/mpeg"
+    }
+}
+
+private fun uploadSharedPlaylistBinaryPart(
+    urlString: String,
+    mimeType: String,
+    file: File
+): Boolean {
+    if (!file.exists() || !file.isFile) {
+        return true
+    }
+    return runCatching {
+        val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            instanceFollowRedirects = true
+            connectTimeout = 30_000
+            readTimeout = 600_000
+            setRequestProperty("Content-Type", mimeType)
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+        }
+        connection.outputStream.use { output ->
+            file.inputStream().use { input -> input.copyTo(output) }
+        }
+        val status = connection.responseCode
+        connection.inputStream?.close()
+        connection.errorStream?.close()
+        connection.disconnect()
+        status in 200..299
+    }.getOrDefault(false)
+}
+
+private fun uploadSharedPlaylist(
+    baseUrl: String,
+    name: String,
+    coverPath: String?,
+    tracks: List<TrackItem>,
+    onProgress: (String) -> Unit = {}
+): SharedPlaylistEntry? {
+    if (tracks.isEmpty()) {
+        return null
+    }
+
+    val payload = JSONObject()
+    payload.put("name", name.ifBlank { "Playlist" })
+    val tracksArray = JSONArray()
+    tracks.forEachIndexed { index, track ->
+        val item = JSONObject()
+        item.put("id", track.id)
+        item.put("title", track.title)
+        item.put("artist", track.artist)
+        item.put("durationMs", track.durationMs)
+        val artworkFile = track.artworkPath?.let { File(it) }?.takeIf { it.exists() && it.isFile }
+        if (artworkFile != null) {
+            item.put("artworkField", "track_artwork_$index")
+        }
+        val audioFile = File(track.filePath)
+        if (audioFile.exists() && audioFile.isFile) {
+            item.put("fileField", "track_file_$index")
+            item.put("fileExtension", audioFile.extension.lowercase().ifBlank { "mp3" })
+        }
+        tracksArray.put(item)
+    }
+    payload.put("tracks", tracksArray)
+
+    val requestUrl = "${baseUrl.trimEnd('/')}/api/shared-playlists"
+    return runCatching {
+        onProgress("Creating playlist...")
+        val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            instanceFollowRedirects = true
+            connectTimeout = 30_000
+            readTimeout = 120_000
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+        }
+        connection.outputStream.use { output ->
+            output.write(payload.toString().toByteArray(StandardCharsets.UTF_8))
+        }
+        val status = connection.responseCode
+        val raw = if (status in 200..299) {
+            connection.inputStream.use { it.readBytes().toString(StandardCharsets.UTF_8) }
+        } else {
+            connection.errorStream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }.orEmpty()
+        }
+        connection.disconnect()
+        if (status !in 200..299) {
+            return@runCatching null
+        }
+        val created = parseSharedPlaylistPayload(JSONObject(raw)) ?: return@runCatching null
+        val normalizedBase = baseUrl.trimEnd('/')
+        coverPath?.let { path ->
+            val coverFile = File(path)
+            if (coverFile.exists() && coverFile.isFile) {
+                onProgress("Uploading cover...")
+                val mimeType = when (coverFile.extension.lowercase()) {
+                    "png" -> "image/png"
+                    "webp" -> "image/webp"
+                    else -> "image/jpeg"
+                }
+                val encodedName = java.net.URLEncoder.encode(coverFile.name, StandardCharsets.UTF_8.toString())
+                if (!uploadSharedPlaylistBinaryPart("$normalizedBase/api/shared-playlists/${created.remoteId}/cover?filename=$encodedName", mimeType, coverFile)) {
+                    return@runCatching null
+                }
+            }
+        }
+        tracks.forEachIndexed { index, track ->
+            onProgress("Uploading track ${index + 1}/${tracks.size}...")
+            track.artworkPath?.let { artworkPath ->
+                val artworkFile = File(artworkPath)
+                if (artworkFile.exists() && artworkFile.isFile) {
+                    val mimeType = when (artworkFile.extension.lowercase()) {
+                        "png" -> "image/png"
+                        "webp" -> "image/webp"
+                        else -> "image/jpeg"
+                    }
+                    val encodedName = java.net.URLEncoder.encode(artworkFile.name, StandardCharsets.UTF_8.toString())
+                    if (!uploadSharedPlaylistBinaryPart("$normalizedBase/api/shared-playlists/${created.remoteId}/tracks/$index/artwork?filename=$encodedName", mimeType, artworkFile)) {
+                        return@runCatching null
+                    }
+                }
+            }
+            val audioFile = File(track.filePath)
+            if (audioFile.exists() && audioFile.isFile) {
+                val encodedName = java.net.URLEncoder.encode(audioFile.name, StandardCharsets.UTF_8.toString())
+                if (!uploadSharedPlaylistBinaryPart("$normalizedBase/api/shared-playlists/${created.remoteId}/tracks/$index/file?filename=$encodedName", guessAudioMimeType(audioFile.absolutePath), audioFile)) {
+                    return@runCatching null
+                }
+            }
+        }
+        created
+    }.getOrNull()
+}
+
+private fun parseSharedPlaylistPayload(payload: JSONObject): SharedPlaylistEntry? {
+    val remoteId = payload.optString("id").trim()
+    val name = payload.optString("name").trim()
+    if (remoteId.isBlank() || name.isBlank()) {
+        return null
+    }
+    val tracksArray = payload.optJSONArray("tracks") ?: JSONArray()
+    val tracks = buildList {
+        for (index in 0 until tracksArray.length()) {
+            val item = tracksArray.optJSONObject(index) ?: continue
+            val title = item.optString("title").trim()
+            val artist = item.optString("artist").trim()
+            if (title.isBlank() && artist.isBlank()) {
+                continue
+            }
+            add(
+                SharedPlaylistTrackEntry(
+                    id = item.optString("id").trim().ifBlank { "track_${index + 1}" },
+                    title = title.ifBlank { "Track ${index + 1}" },
+                    artist = artist,
+                    durationMs = item.optLong("durationMs").coerceAtLeast(0L),
+                    artworkUrl = item.optString("artworkUrl").trim().ifBlank { null },
+                    fileUrl = item.optString("fileUrl").trim().ifBlank { null },
+                    cachedArtworkPath = null,
+                    cachedFilePath = null
+                )
+            )
+        }
+    }
+    return SharedPlaylistEntry(
+        remoteId = remoteId,
+        localId = SharedPlaylistStore.syntheticLocalId(remoteId),
+        name = name,
+        shareUrl = payload.optString("shareUrl").trim().ifBlank {
+            payload.optString("url").trim().ifBlank { payload.optString("webUrl").trim() }
+        },
+        sourceBaseUrl = payload.optString("sourceBaseUrl").trim(),
+        contentSha256 = payload.optString("contentSha256").trim(),
+        coverUrl = payload.optString("coverUrl").trim().ifBlank { null },
+        cachedCoverPath = null,
+        tracks = tracks,
+        createdAt = System.currentTimeMillis()
+    )
+}
+
+private fun fetchSharedPlaylistFromDeepLink(
+    uriString: String,
+    fallbackBaseUrl: String,
+    cachedEntry: SharedPlaylistEntry? = null
+): SharedPlaylistEntry? {
+    val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return null
+    val isCustomScheme = uri.scheme.equals("sonora", ignoreCase = true) &&
+        uri.host.equals("playlist", ignoreCase = true) &&
+        uri.path == "/shared"
+    val isWebLink = uri.scheme.equals("https", ignoreCase = true) &&
+        !uri.host.isNullOrBlank() &&
+        (uri.pathSegments.firstOrNull() == "playlists") &&
+        uri.pathSegments.size >= 2
+    if (!isCustomScheme && !isWebLink) {
+        return null
+    }
+    val playlistId = if (isCustomScheme) {
+        uri.getQueryParameter("id")?.trim().orEmpty()
+    } else {
+        uri.pathSegments.getOrNull(1)?.trim().orEmpty()
+    }
+    if (playlistId.isBlank()) {
+        return null
+    }
+    val baseUrl = if (isCustomScheme) {
+        uri.getQueryParameter("source")?.trim()?.ifBlank { null }
+            ?: fallbackBaseUrl.trim().ifBlank { "https://api.corebrew.ru" }
+    } else {
+        "${uri.scheme}://${uri.host}${if (uri.port > 0) ":${uri.port}" else ""}"
+    }
+    val requestUrl = "${baseUrl.trimEnd('/')}/api/shared-playlists/$playlistId"
+    return runCatching {
+        val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            connectTimeout = 30_000
+            readTimeout = 120_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+        }
+        connection.connect()
+        val status = connection.responseCode
+        val raw = if (status in 200..299) {
+            connection.inputStream.use { it.readBytes().toString(StandardCharsets.UTF_8) }
+        } else {
+            connection.errorStream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }.orEmpty()
+        }
+        connection.disconnect()
+        if (status !in 200..299 || raw.isBlank()) {
+            return@runCatching cachedEntry
+        }
+        val fetched = parseSharedPlaylistPayload(JSONObject(raw)) ?: return@runCatching cachedEntry
+        if (
+            cachedEntry != null &&
+            fetched.remoteId == cachedEntry.remoteId &&
+            fetched.contentSha256.isNotBlank() &&
+            fetched.contentSha256 == cachedEntry.contentSha256
+        ) {
+            return@runCatching cachedEntry
+        }
+        fetched
+    }.getOrNull() ?: cachedEntry
+}
+
+private fun extractSharedPlaylistRemoteId(uriString: String): String? {
+    val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return null
+    val isCustomScheme = uri.scheme.equals("sonora", ignoreCase = true) &&
+        uri.host.equals("playlist", ignoreCase = true) &&
+        uri.path == "/shared"
+    val isWebLink = uri.scheme.equals("https", ignoreCase = true) &&
+        !uri.host.isNullOrBlank() &&
+        (uri.pathSegments.firstOrNull() == "playlists") &&
+        uri.pathSegments.size >= 2
+    return when {
+        isCustomScheme -> uri.getQueryParameter("id")?.trim()?.ifBlank { null }
+        isWebLink -> uri.pathSegments.getOrNull(1)?.trim()?.ifBlank { null }
+        else -> null
+    }
+}
+
 private fun openExternalUrl(context: Context, url: String) {
     if (url.isBlank()) {
         return
@@ -10104,6 +11058,6 @@ private fun formatDuration(durationMs: Long): String {
 @Composable
 private fun SonoraAppPreview() {
     SonoraTheme(dynamicColor = false) {
-        SonoraApp()
+        SonoraApp(incomingSharedPlaylistUrlState = remember { mutableStateOf(null) })
     }
 }
