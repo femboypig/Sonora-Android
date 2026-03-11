@@ -714,6 +714,9 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                     add(sanitized)
                     replaced = true
                 } else {
+    var homeRecommendationsSessionSeed by rememberSaveable {
+        mutableIntStateOf((((System.currentTimeMillis() / 1000L) % 100_000L).toInt()).coerceAtLeast(1))
+    }
                     add(existing)
                 }
             }
@@ -1238,16 +1241,13 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val homeWaveTracks = remember(tracks, analyticsByID, favoriteTrackIDs) {
         buildHomeForYouTracks(tracks, analyticsByID, favoriteTrackIDs, limit = 120)
     }
-    val homeRotationSeed = remember(homeVisitCount) {
-        ((homeVisitCount - 1) / 4) + 1
-    }
-    val homeNeedThisTracks = remember(tracks, analyticsByID, favoriteTrackIDs, homeRotationSeed) {
+    val homeNeedThisTracks = remember(tracks, analyticsByID, favoriteTrackIDs, homeRecommendationsSessionSeed) {
         buildHomeNeedThisTracks(
             tracks = tracks,
             analyticsByID = analyticsByID,
             favoriteTrackIDs = favoriteTrackIDs,
             limit = 12,
-            rotationSeed = homeRotationSeed
+            rotationSeed = homeRecommendationsSessionSeed
         )
     }
     val homeWaveStartTrack = remember(homeWaveTracks, homeVisitCount, lastPresentedHomeHeroTrackID) {
@@ -1289,13 +1289,13 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val homeLastAdded = remember(tracks) {
         tracks.sortedByDescending { it.addedAt }.take(14)
     }
-    val homeFreshChoiceTracks = remember(tracks, analyticsByID, favoriteTrackIDs, homeRotationSeed) {
+    val homeFreshChoiceTracks = remember(tracks, analyticsByID, favoriteTrackIDs, homeRecommendationsSessionSeed) {
         buildHomeFreshChoiceTracks(
             tracks = tracks,
             analyticsByID = analyticsByID,
             favoriteTrackIDs = favoriteTrackIDs,
             limit = 10,
-            rotationSeed = homeRotationSeed
+            rotationSeed = homeRecommendationsSessionSeed
         )
     }
     val homeAlbums = remember(tracks) {
