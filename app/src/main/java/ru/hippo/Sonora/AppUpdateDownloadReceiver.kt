@@ -55,7 +55,7 @@ class AppUpdateDownloadReceiver : BroadcastReceiver() {
             .setContentTitle("Sonora ${snapshot.release.versionName} downloaded")
             .setContentText("Open Sonora to continue installation.")
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openPendingIntent)
             .build()
 
