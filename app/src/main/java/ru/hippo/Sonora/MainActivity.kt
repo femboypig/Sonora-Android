@@ -5806,8 +5806,26 @@ private fun HomeMyWaveCard(
     isPlaying: Boolean,
     onPlayToggle: () -> Unit
 ) {
-    val paletteTarget = remember(track.id, track.artworkPath, track.filePath) {
-        buildWavePaletteForTrack(track)
+    val paletteCacheKey = remember(track.id, track.artworkPath, track.filePath) {
+        wavePaletteCacheKey(track)
+    }
+    val paletteTarget by produceState(
+        initialValue = paletteCacheKey?.let { wavePaletteCacheGet(it) } ?: defaultWavePalette(),
+        key1 = paletteCacheKey
+    ) {
+        val key = paletteCacheKey ?: run {
+            value = defaultWavePalette()
+            return@produceState
+        }
+        wavePaletteCacheGet(key)?.let { cached ->
+            value = cached
+            return@produceState
+        }
+        val resolved = withContext(Dispatchers.IO) {
+            buildWavePaletteForTrack(track)
+        }
+        wavePaletteCachePut(key, resolved)
+        value = resolved
     }
     val wavePaletteAnim = tween<Color>(durationMillis = 1500, easing = LinearEasing)
     val c0 by animateColorAsState(targetValue = paletteTarget[0], animationSpec = wavePaletteAnim, label = "wave_c0")
@@ -6027,13 +6045,7 @@ private fun buildWavePaletteForTrack(track: TrackItem): List<Color> {
         }
     }
 
-    val fallback = Color(0xFF4A3E35)
-    return listOf(
-        fallback,
-        blendColors(fallback, Color(0xFF7E6B59), 0.32f),
-        blendColors(fallback, Color.Black, 0.18f),
-        blendColors(fallback, Color(0xFF7A5B64), 0.24f)
-    )
+    return defaultWavePalette()
 }
 
 private fun extractWavePaletteFromBitmap(bitmap: android.graphics.Bitmap): List<Color> {
@@ -10207,6 +10219,42 @@ private fun playlistAccentCachePut(key: String, color: Color) {
     synchronized(playlistAccentCacheLock) {
         playlistAccentCache[key] = color
     }
+}
+
+private val wavePaletteCacheLock = Any()
+private val wavePaletteCache = object : LinkedHashMap<String, List<Color>>(48, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Color>>?): Boolean {
+        return size > 48
+    }
+}
+
+private fun wavePaletteCacheKey(track: TrackItem?): String? {
+    if (track == null) {
+        return null
+    }
+    return "${track.id}|${track.artworkPath.orEmpty()}|${track.filePath}"
+}
+
+private fun wavePaletteCacheGet(key: String): List<Color>? {
+    synchronized(wavePaletteCacheLock) {
+        return wavePaletteCache[key]
+    }
+}
+
+private fun wavePaletteCachePut(key: String, palette: List<Color>) {
+    synchronized(wavePaletteCacheLock) {
+        wavePaletteCache[key] = palette
+    }
+}
+
+private fun defaultWavePalette(): List<Color> {
+    val fallback = Color(0xFF4A3E35)
+    return listOf(
+        fallback,
+        blendColors(fallback, Color(0xFF7E6B59), 0.32f),
+        blendColors(fallback, Color.Black, 0.18f),
+        blendColors(fallback, Color(0xFF7A5B64), 0.24f)
+    )
 }
 
 private val artworkCacheLock = Any()
