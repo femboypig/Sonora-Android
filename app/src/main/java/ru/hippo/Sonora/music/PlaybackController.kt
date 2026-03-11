@@ -82,6 +82,7 @@ class PlaybackController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val random = Random(SystemClock.elapsedRealtime())
     private val artworkCache = mutableMapOf<String, Bitmap?>()
+    private val artworkLoadingTrackIds = mutableSetOf<String>()
     private val shuffleHistory = ArrayDeque<Int>()
     private val shuffleBag = ArrayDeque<Int>()
 
@@ -94,6 +95,9 @@ class PlaybackController(
     private var pendingSeekPositionMs: Long = -1L
     private var pendingSeekSetAtMs: Long = 0L
     private val pendingSeekHoldTimeoutMs: Long = 15_000L
+    private var playRequestToken: Long = 0L
+    private var playerPrepared: Boolean = false
+    private var pendingPlayWhenPrepared: Boolean = false
 
     private fun clearPendingSeekHold() {
         pendingSeekPositionMs = -1L
@@ -175,14 +179,20 @@ class PlaybackController(
             clearPendingSeekHold()
             return
         }
-        val duration = player.duration
-        if (duration <= 0) {
-            clearPendingSeekHold()
-            return
+        val playerDuration = player.duration.toLong().coerceAtLeast(0L)
+        val fallbackDuration = currentTrack?.durationMs?.coerceAtLeast(0L) ?: 0L
+        val knownDuration = maxOf(playerDuration, fallbackDuration)
+        val clamped = if (knownDuration > 0L) {
+            positionMs.coerceIn(0L, knownDuration)
+        } else {
+            positionMs.coerceAtLeast(0L)
         }
-        val clamped = positionMs.coerceIn(0L, duration.toLong())
         pendingSeekPositionMs = clamped
         pendingSeekSetAtMs = android.os.SystemClock.elapsedRealtime()
+        if (!playerPrepared || playerDuration <= 0L) {
+            updateExternalState()
+            return
+        }
         player.seekTo(clamped.toInt())
         updateExternalState()
     }
@@ -268,10 +278,15 @@ class PlaybackController(
         val clampedPosition = positionMs.coerceAtLeast(0L)
 
         if (!shouldPlay) {
+            pendingPlayWhenPrepared = false
+            pendingSeekPositionMs = clampedPosition
+            pendingSeekSetAtMs = android.os.SystemClock.elapsedRealtime()
             mediaPlayer?.let { player ->
                 runCatching { player.setVolume(0f, 0f) }
-                seekTo(clampedPosition)
-                if (player.isPlaying) {
+                if (playerPrepared) {
+                    seekTo(clampedPosition)
+                }
+                if (playerPrepared && player.isPlaying) {
                     player.pause()
                 }
                 isPlaying = false
@@ -290,6 +305,12 @@ class PlaybackController(
     fun togglePlayPause() {
         cancelPendingAutoNext()
         val player = mediaPlayer ?: return
+        if (!playerPrepared) {
+            pendingPlayWhenPrepared = !pendingPlayWhenPrepared
+            isPlaying = pendingPlayWhenPrepared
+            updateExternalState()
+            return
+        }
         if (isPlaying) {
             player.pause()
             isPlaying = false
@@ -540,7 +561,19 @@ class PlaybackController(
 
         cancelPendingAutoNext()
         clearPendingSeekHold()
+        playRequestToken += 1L
+        val requestToken = playRequestToken
         stopPlayer()
+        currentIndex = index
+        currentTrackId = track.id
+        playerPrepared = false
+        pendingPlayWhenPrepared = true
+        isPlaying = false
+        if (isShuffleEnabled && queue.size > 1) {
+            refillShuffleBag(excluding = currentIndex)
+        }
+        updateExternalState()
+
         val player = try {
             MediaPlayer().apply {
                 setAudioAttributes(
@@ -550,13 +583,47 @@ class PlaybackController(
                         .build()
                 )
                 setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK)
+                setOnPreparedListener { preparedPlayer ->
+                    if (playRequestToken != requestToken || mediaPlayer !== preparedPlayer) {
+                        runCatching { preparedPlayer.release() }
+                        return@setOnPreparedListener
+                    }
+                    playerPrepared = true
+                    val pendingSeek = pendingSeekPositionMs
+                    if (pendingSeek >= 0L && preparedPlayer.duration > 0) {
+                        preparedPlayer.seekTo(pendingSeek.coerceIn(0L, preparedPlayer.duration.toLong()).toInt())
+                    }
+                    if (pendingPlayWhenPrepared) {
+                        preparedPlayer.start()
+                        isPlaying = true
+                        onTrackPlayed(track.id)
+                    } else {
+                        isPlaying = false
+                    }
+                    updateExternalState()
+                }
                 setDataSource(track.filePath)
                 setOnCompletionListener {
-                    handleTrackCompleted()
+                    if (playRequestToken == requestToken) {
+                        handleTrackCompleted()
+                    }
                 }
-                prepare()
+                setOnErrorListener { failedPlayer, _, _ ->
+                    if (playRequestToken == requestToken && mediaPlayer === failedPlayer) {
+                        playerPrepared = false
+                        pendingPlayWhenPrepared = false
+                        stopPlayer()
+                        currentIndex = -1
+                        currentTrackId = null
+                        isPlaying = false
+                        updateExternalState()
+                    } else {
+                        runCatching { failedPlayer.release() }
+                    }
+                    true
+                }
+                prepareAsync()
                 setVolume(1.0f, 1.0f)
-                start()
             }
         } catch (_: Exception) {
             null
@@ -571,20 +638,16 @@ class PlaybackController(
         }
 
         mediaPlayer = player
-        currentIndex = index
-        currentTrackId = track.id
-        isPlaying = true
-        if (isShuffleEnabled && queue.size > 1) {
-            refillShuffleBag(excluding = currentIndex)
-        }
-        onTrackPlayed(track.id)
-        updateExternalState()
         return true
     }
 
     private fun stopPlayer() {
         cancelPendingAutoNext()
         clearPendingSeekHold()
+        playerPrepared = false
+        pendingPlayWhenPrepared = false
+        mediaPlayer?.setOnPreparedListener(null)
+        mediaPlayer?.setOnErrorListener(null)
         mediaPlayer?.setOnCompletionListener(null)
         mediaPlayer?.release()
         mediaPlayer = null
@@ -702,8 +765,9 @@ class PlaybackController(
             putString(MediaMetadata.METADATA_KEY_TITLE, displayTitle(track))
             putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
             putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs())
-            loadArtworkBitmap(track)?.let { putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
+            cachedArtworkBitmap(track)?.let { putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
         }.build()
+        requestArtworkLoad(track)
 
         mediaSession.isActive = true
         mediaSession.setPlaybackState(state)
@@ -757,7 +821,7 @@ class PlaybackController(
             .setContentText(track.artist.ifBlank { "Unknown Artist" })
             .setContentIntent(contentIntent)
             .setDeleteIntent(actionPendingIntent(ACTION_STOP))
-            .setLargeIcon(loadArtworkBitmap(track))
+            .setLargeIcon(cachedArtworkBitmap(track))
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -785,9 +849,27 @@ class PlaybackController(
         )
     }
 
-    private fun loadArtworkBitmap(track: TrackItem): Bitmap? {
-        artworkCache[track.id]?.let { return it }
+    private fun cachedArtworkBitmap(track: TrackItem): Bitmap? {
+        return artworkCache[track.id]
+    }
 
+    private fun requestArtworkLoad(track: TrackItem) {
+        if (artworkCache.containsKey(track.id) || !artworkLoadingTrackIds.add(track.id)) {
+            return
+        }
+        scope.launch(Dispatchers.IO) {
+            val resolved = resolveArtworkBitmap(track)
+            launch(Dispatchers.Main.immediate) {
+                artworkLoadingTrackIds.remove(track.id)
+                artworkCache[track.id] = resolved
+                if (currentTrackId == track.id) {
+                    updateExternalState()
+                }
+            }
+        }
+    }
+
+    private fun resolveArtworkBitmap(track: TrackItem): Bitmap? {
         val fileBitmap = track.artworkPath?.takeIf { it.isNotBlank() }?.let { path ->
             if (path.startsWith("http://", ignoreCase = true) ||
                 path.startsWith("https://", ignoreCase = true)
@@ -803,9 +885,7 @@ class PlaybackController(
             }
         }
 
-        val resolved = fileBitmap ?: decodeEmbeddedArtwork(track.filePath)
-        artworkCache[track.id] = resolved
-        return resolved
+        return fileBitmap ?: decodeEmbeddedArtwork(track.filePath)
     }
 
     private fun decodeRemoteArtwork(url: String): Bitmap? {
