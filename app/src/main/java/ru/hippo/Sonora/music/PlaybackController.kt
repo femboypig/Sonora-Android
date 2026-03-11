@@ -595,10 +595,10 @@ class PlaybackController(
                     }
                     if (pendingPlayWhenPrepared) {
                         preparedPlayer.start()
-                        isPlaying = true
+                        this@PlaybackController.isPlaying = true
                         onTrackPlayed(track.id)
                     } else {
-                        isPlaying = false
+                        this@PlaybackController.isPlaying = false
                     }
                     updateExternalState()
                 }
@@ -615,7 +615,7 @@ class PlaybackController(
                         stopPlayer()
                         currentIndex = -1
                         currentTrackId = null
-                        isPlaying = false
+                        this@PlaybackController.isPlaying = false
                         updateExternalState()
                     } else {
                         runCatching { failedPlayer.release() }
