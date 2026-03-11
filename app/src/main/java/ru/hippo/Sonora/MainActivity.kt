@@ -165,6 +165,7 @@ import kotlin.math.sin
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -8748,16 +8749,10 @@ private fun MiniStreamingArtwork(
             isLoading = false
             return@LaunchedEffect
         }
-
         isLoading = true
         val url = artworkUrl?.trim().orEmpty()
-        val decoded = withContext(Dispatchers.IO) {
+        val decoded = loadArtworkBitmapCached(key) {
             decodeArtworkBitmap(url, maxSize = decodeMaxSize)
-        }
-        if (decoded != null) {
-            artworkCachePut(key, decoded)
-        } else {
-            artworkMissingCachePut(key)
         }
         imageBitmap = decoded
         isLoading = false
@@ -8884,14 +8879,8 @@ private fun rememberTrackArtwork(
             imageBitmap = null
             return@LaunchedEffect
         }
-
-        val decoded = withContext(Dispatchers.IO) {
+        val decoded = loadArtworkBitmapCached(key) {
             decodeTrackArtworkBitmap(track, maxSize = maxSize)
-        }
-        if (decoded != null) {
-            artworkCachePut(key, decoded)
-        } else {
-            artworkMissingCachePut(key)
         }
         imageBitmap = decoded
     }
@@ -8930,14 +8919,8 @@ private fun rememberArtworkByPath(
             imageBitmap = null
             return@LaunchedEffect
         }
-
-        val decoded = withContext(Dispatchers.IO) {
+        val decoded = loadArtworkBitmapCached(key) {
             decodeArtworkBitmap(normalizedPath, maxSize = maxSize)
-        }
-        if (decoded != null) {
-            artworkCachePut(key, decoded)
-        } else {
-            artworkMissingCachePut(key)
         }
         imageBitmap = decoded
     }
@@ -10297,6 +10280,56 @@ private fun artworkMissingCacheContains(key: String): Boolean {
 private fun artworkMissingCachePut(key: String) {
     synchronized(artworkCacheLock) {
         artworkMissingCache.add(key)
+    }
+}
+
+private val artworkDecodeInFlightLock = Any()
+private val artworkDecodeInFlight = mutableMapOf<String, CompletableDeferred<androidx.compose.ui.graphics.ImageBitmap?>>()
+
+private suspend fun loadArtworkBitmapCached(
+    key: String,
+    loader: () -> androidx.compose.ui.graphics.ImageBitmap?
+): androidx.compose.ui.graphics.ImageBitmap? {
+    artworkCacheGet(key)?.let { return it }
+    if (artworkMissingCacheContains(key)) {
+        return null
+    }
+
+    val (deferred, isOwner) = synchronized(artworkDecodeInFlightLock) {
+        val existing = artworkDecodeInFlight[key]
+        if (existing != null) {
+            existing to false
+        } else {
+            val created = CompletableDeferred<androidx.compose.ui.graphics.ImageBitmap?>()
+            artworkDecodeInFlight[key] = created
+            created to true
+        }
+    }
+
+    if (!isOwner) {
+        return deferred.await()
+    }
+
+    return try {
+        val decoded = withContext(Dispatchers.IO) {
+            loader()
+        }
+        if (decoded != null) {
+            artworkCachePut(key, decoded)
+        } else {
+            artworkMissingCachePut(key)
+        }
+        deferred.complete(decoded)
+        decoded
+    } catch (error: Throwable) {
+        deferred.complete(null)
+        throw error
+    } finally {
+        synchronized(artworkDecodeInFlightLock) {
+            if (artworkDecodeInFlight[key] === deferred) {
+                artworkDecodeInFlight.remove(key)
+            }
+        }
     }
 }
 
