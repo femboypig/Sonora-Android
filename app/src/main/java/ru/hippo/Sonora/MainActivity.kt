@@ -713,11 +713,11 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val miniStreamingInstallingJobs = remember { mutableMapOf<String, Job>() }
     val miniStreamingResolvingJobs = remember { mutableMapOf<String, Job>() }
     var miniStreamingPlaybackQueue by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
-    var miniStreamingActiveTrackId by rememberSaveable { mutableStateOf<String?>(null) }
-    var miniStreamingResolvedPayloadByTrackId by remember {
     var homeRecommendationsSessionSeed by rememberSaveable {
         mutableIntStateOf((((System.currentTimeMillis() / 1000L) % 100_000L).toInt()).coerceAtLeast(1))
     }
+    var miniStreamingActiveTrackId by rememberSaveable { mutableStateOf<String?>(null) }
+    var miniStreamingResolvedPayloadByTrackId by remember {
         mutableStateOf<Map<String, MiniStreamingDownloadPayload>>(emptyMap())
     }
     var miniStreamingPendingTrack by remember { mutableStateOf<TrackItem?>(null) }
