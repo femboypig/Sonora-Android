@@ -1,6 +1,7 @@
 package ru.hippo.Sonora
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -19,6 +20,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -73,6 +75,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -126,8 +129,11 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -298,6 +304,25 @@ private data class SonoraAppSettings(
     val maxStorageMb: Int = -1,
     val cacheOnlinePlaylistTracks: Boolean = false,
     val onlinePlaylistCacheMaxMb: Int = 1024
+)
+
+private data class AndroidAppUpdateRelease(
+    val id: String,
+    val title: String,
+    val versionName: String,
+    val versionCode: Long,
+    val coverUrl: String?,
+    val downloadUrl: String,
+    val notes: List<String>
+)
+
+private data class AndroidAppUpdateState(
+    val checking: Boolean = false,
+    val latestRelease: AndroidAppUpdateRelease? = null,
+    val updateAvailable: Boolean = false,
+    val statusMessage: String? = null,
+    val downloading: Boolean = false,
+    val downloadProgress: Float = 0f
 )
 
 private data class PlaybackSessionSnapshot(
@@ -609,7 +634,8 @@ private val LocalAccentColor = staticCompositionLocalOf {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
-    val context = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    val uiContext = androidx.compose.ui.platform.LocalContext.current
+    val context = uiContext.applicationContext
     val trackStore = remember(context) { TrackStore(context) }
     val playlistStore = remember(context) { PlaylistStore(context) }
     val sharedPlaylistStore = remember(context) { SharedPlaylistStore(context) }
@@ -619,6 +645,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val appVersionLabel = remember(context) { resolveAppVersionLabel(context) }
+    val appVersionCode = remember(context) { resolveAppVersionCode(context) }
     val githubProjectURL = remember { "https://github.com/femboypig/Sonora-Android" }
     val githubProjectLabel = remember { "femboypig/Sonora-Android" }
     val storageRootPath = remember(context) { formatStoragePathForAbout(context.filesDir.absolutePath) }
@@ -704,6 +731,8 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     var sharedPlaylistUploadingMessage by remember { mutableStateOf("Uploading tracks to server...") }
     var sharedPlaylistImporting by remember { mutableStateOf(false) }
     var sharedPlaylistImportingMessage by remember { mutableStateOf("Saving tracks to library...") }
+    var androidAppUpdateState by remember { mutableStateOf(AndroidAppUpdateState()) }
+    var androidAppUpdateDownloadJob by remember { mutableStateOf<Job?>(null) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val applySharedPlaylistProgressUpdate: (SharedPlaylistEntry) -> Unit = { updatedEntry ->
         val sanitized = sanitizeSharedPlaylistEntry(updatedEntry)
@@ -3333,6 +3362,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                         settings = appSettings,
                         storageUsedBytes = storageUsageBytes,
                         onlinePlaylistCacheUsedBytes = sharedPlaylistAudioCacheUsageBytes,
+                        appUpdateState = androidAppUpdateState,
                         appVersionLabel = appVersionLabel,
                         githubProjectLabel = githubProjectLabel,
                         storageRootPath = storageRootPath,
@@ -3349,8 +3379,113 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                                 reloadSharedPlaylists()
                             }
                         },
+                        onCheckForUpdates = {
+                            scope.launch {
+                                androidAppUpdateState = androidAppUpdateState.copy(
+                                    checking = true,
+                                    statusMessage = "Checking..."
+                                )
+                                val fetched = withContext(Dispatchers.IO) {
+                                    fetchLatestAndroidAppUpdate(
+                                        baseUrl = BuildConfig.BACKEND_BASE_URL.ifBlank { "https://api.corebrew.ru" },
+                                        currentVersionCode = appVersionCode
+                                    )
+                                }
+                                androidAppUpdateState = fetched ?: AndroidAppUpdateState(
+                                    checking = false,
+                                    latestRelease = androidAppUpdateState.latestRelease,
+                                    updateAvailable = false,
+                                    statusMessage = "Could not check for updates"
+                                )
+                                if (fetched?.updateAvailable == true) {
+                                    snackbarHostState.showSnackbar("Update found")
+                                } else if (fetched != null) {
+                                    snackbarHostState.showSnackbar(fetched.statusMessage ?: "No updates")
+                                }
+                            }
+                        },
+                        onInstallUpdate = { release ->
+                            val job = scope.launch {
+                                androidAppUpdateState = androidAppUpdateState.copy(
+                                    downloading = true,
+                                    downloadProgress = 0f,
+                                    statusMessage = "Downloading ${release.versionName}..."
+                                )
+                                try {
+                                    val apkFile = withContext(Dispatchers.IO) {
+                                        downloadAndroidAppUpdateApk(
+                                            context = context,
+                                            release = release,
+                                            onProgress = { downloadedBytes, totalBytes ->
+                                                mainHandler.post {
+                                                    val progress = if (totalBytes > 0L) {
+                                                        (downloadedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+                                                    } else {
+                                                        0f
+                                                    }
+                                                    androidAppUpdateState = androidAppUpdateState.copy(
+                                                        downloading = true,
+                                                        downloadProgress = progress,
+                                                        statusMessage = if (totalBytes > 0L) {
+                                                            "Downloading ${(progress * 100f).roundToInt()}%"
+                                                        } else {
+                                                            "Downloading update..."
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        )
+                                    }
+                                    androidAppUpdateDownloadJob = null
+                                    if (apkFile == null) {
+                                        androidAppUpdateState = androidAppUpdateState.copy(
+                                            downloading = false,
+                                            downloadProgress = 0f,
+                                            statusMessage = "Could not download update"
+                                        )
+                                        snackbarHostState.showSnackbar("Could not download update")
+                                    } else {
+                                        androidAppUpdateState = androidAppUpdateState.copy(
+                                            downloading = false,
+                                            downloadProgress = 1f,
+                                            statusMessage = "Opening installer..."
+                                        )
+                                        val installerOpened = installDownloadedApk(uiContext, apkFile)
+                                        androidAppUpdateState = androidAppUpdateState.copy(
+                                            downloading = false,
+                                            downloadProgress = if (installerOpened) 1f else 0f,
+                                            statusMessage = if (installerOpened) {
+                                                "Opening installer..."
+                                            } else {
+                                                "Could not open installer"
+                                            }
+                                        )
+                                        if (!installerOpened) {
+                                            snackbarHostState.showSnackbar("Could not open installer")
+                                        }
+                                    }
+                                } catch (_: java.util.concurrent.CancellationException) {
+                                    androidAppUpdateDownloadJob = null
+                                    androidAppUpdateState = androidAppUpdateState.copy(
+                                        downloading = false,
+                                        downloadProgress = 0f,
+                                        statusMessage = "Update download canceled"
+                                    )
+                                }
+                            }
+                            androidAppUpdateDownloadJob = job
+                        },
+                        onCancelUpdateDownload = {
+                            androidAppUpdateDownloadJob?.cancel()
+                            androidAppUpdateDownloadJob = null
+                            androidAppUpdateState = androidAppUpdateState.copy(
+                                downloading = false,
+                                downloadProgress = 0f,
+                                statusMessage = "Update download canceled"
+                            )
+                        },
                         onOpenGithub = {
-                            openExternalUrl(context, githubProjectURL)
+                            openExternalUrl(uiContext, githubProjectURL)
                         },
                         onExportBackup = {
                             exportBackupLauncher.launch(buildBackupArchiveFileName())
@@ -6504,12 +6639,16 @@ private fun SettingsPage(
     settings: SonoraAppSettings,
     storageUsedBytes: Long,
     onlinePlaylistCacheUsedBytes: Long,
+    appUpdateState: AndroidAppUpdateState,
     appVersionLabel: String,
     githubProjectLabel: String,
     storageRootPath: String,
     libraryTrackCount: Int,
     onSettingsChange: (SonoraAppSettings) -> Unit,
     onClearOnlinePlaylistCache: () -> Unit,
+    onCheckForUpdates: () -> Unit,
+    onInstallUpdate: (AndroidAppUpdateRelease) -> Unit,
+    onCancelUpdateDownload: () -> Unit,
     onOpenGithub: () -> Unit,
     onExportBackup: () -> Unit,
     onImportBackup: () -> Unit
@@ -6697,6 +6836,59 @@ private fun SettingsPage(
                     value = "Delete",
                     onClick = onClearOnlinePlaylistCache
                 )
+            }
+        }
+
+        item {
+            SettingsSectionHeading(text = "Updates")
+        }
+        item {
+            SettingsCard {
+                SettingsLinkRow(
+                    title = "Check for updates",
+                    value = if (appUpdateState.checking) "Checking..." else "Check now",
+                    onClick = {
+                        if (!appUpdateState.checking) {
+                            onCheckForUpdates()
+                        }
+                    }
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                if (appUpdateState.checking) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Checking backend for new Android build...",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else if (appUpdateState.updateAvailable && appUpdateState.latestRelease != null) {
+                    val latestRelease = appUpdateState.latestRelease
+                    if (latestRelease != null) {
+                        AndroidAppUpdateCardGate(
+                            release = latestRelease,
+                            updateState = appUpdateState,
+                            onUpdate = { onInstallUpdate(latestRelease) },
+                            onCancel = onCancelUpdateDownload
+                        )
+                    }
+                } else {
+                    SettingsInfoRow(
+                        title = "Status",
+                        value = appUpdateState.statusMessage ?: "Installed version: $appVersionLabel"
+                    )
+                }
             }
         }
 
@@ -7414,6 +7606,288 @@ private fun SettingsInfoRow(
         ),
         color = valueColor
     )
+}
+
+@Composable
+private fun AndroidAppUpdateCardGate(
+    release: AndroidAppUpdateRelease,
+    updateState: AndroidAppUpdateState,
+    onUpdate: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val coverBitmap by produceState<android.graphics.Bitmap?>(initialValue = null, release.coverUrl) {
+        if (release.coverUrl.isNullOrBlank()) {
+            value = null
+            return@produceState
+        }
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val connection = (URL(release.coverUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    instanceFollowRedirects = true
+                    connectTimeout = 15_000
+                    readTimeout = 15_000
+                    setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+                }
+                connection.connect()
+                if (connection.responseCode !in 200..299) {
+                    connection.disconnect()
+                    return@runCatching null
+                }
+                val bytes = connection.inputStream.use { it.readBytes() }
+                connection.disconnect()
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
+        }
+    }
+
+    if (!release.coverUrl.isNullOrBlank() && coverBitmap == null) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = "Loading update...",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
+
+    AndroidAppUpdateCard(
+        release = release,
+        coverBitmap = coverBitmap,
+        updateState = updateState,
+        onUpdate = onUpdate,
+        onCancel = onCancel
+    )
+}
+
+@Composable
+private fun AndroidAppUpdateCard(
+    release: AndroidAppUpdateRelease,
+    coverBitmap: android.graphics.Bitmap?,
+    updateState: AndroidAppUpdateState,
+    onUpdate: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Spacer(modifier = Modifier.height(2.dp))
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StaticUpdateCover(
+                bitmap = coverBitmap,
+                modifier = Modifier
+                    .size(58.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = release.title,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Version ${release.versionName} (${release.versionCode})",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        if (release.notes.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                release.notes.take(6).forEach { note ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text(
+                            text = "•",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = note,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (updateState.downloading) {
+            Spacer(modifier = Modifier.height(14.dp))
+            WaveDownloadProgressBar(
+                progress = updateState.downloadProgress.coerceIn(0f, 1f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(18.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = updateState.statusMessage ?: "Downloading update...",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else if (!updateState.statusMessage.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = updateState.statusMessage.orEmpty(),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (updateState.downloading) Color(0xFFFF3B30) else Color(0xFF0A84FF))
+                .clickable(onClick = if (updateState.downloading) onCancel else onUpdate)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (updateState.downloading) "Cancel" else "Update",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun WaveDownloadProgressBar(
+    progress: Float,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "update_wave_progress")
+    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+    val waveShift by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1700, easing = LinearEasing)
+        ),
+        label = "update_wave_progress_shift"
+    )
+    Canvas(modifier = modifier) {
+        val progressValue = progress.coerceIn(0f, 1f)
+        val centerY = size.height * 0.5f
+        val lineHeight = 2.dp.toPx()
+        val activeWidth = size.width * progressValue
+        val wavelength = 22.dp.toPx()
+        val amplitude = 2.6.dp.toPx()
+        val step = 2.dp.toPx().coerceAtLeast(1f)
+        val phaseOffset = waveShift * (Math.PI.toFloat() * 2f)
+
+        drawRoundRect(
+            color = trackColor,
+            topLeft = Offset(0f, centerY - (lineHeight * 0.5f)),
+            size = Size(size.width, lineHeight),
+            cornerRadius = CornerRadius(lineHeight * 0.5f, lineHeight * 0.5f)
+        )
+
+        if (activeWidth > 0f) {
+            val wavePath = Path()
+            var x = 0f
+            wavePath.moveTo(0f, centerY)
+            while (x <= activeWidth) {
+                val y = centerY + (sin(((x / wavelength) * (Math.PI.toFloat() * 2f) + phaseOffset).toDouble()).toFloat() * amplitude)
+                wavePath.lineTo(x, y)
+                x += step
+            }
+            drawPath(
+                path = wavePath,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF3EA2FF),
+                        Color(0xFF0A84FF),
+                        Color(0xFF69B9FF)
+                    ),
+                    start = Offset(0f, centerY),
+                    end = Offset(activeWidth.coerceAtLeast(1f), centerY)
+                ),
+                style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StaticUpdateCover(
+    bitmap: android.graphics.Bitmap?,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text(
+                text = "APK",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+            )
+        }
+    }
 }
 
 @Composable
@@ -11014,6 +11488,207 @@ private fun openExternalUrl(context: Context, url: String) {
     }
     runCatching {
         context.startActivity(intent)
+    }
+}
+
+private fun parseAndroidAppUpdateRelease(payload: JSONObject?): AndroidAppUpdateRelease? {
+    payload ?: return null
+    val id = payload.optString("id").trim()
+    val title = payload.optString("title").trim()
+    val versionName = payload.optString("versionName").trim()
+    val versionCode = payload.optLong("versionCode").coerceAtLeast(0L)
+    val downloadUrl = payload.optString("downloadUrl").trim()
+    if (id.isBlank() || title.isBlank() || versionName.isBlank() || versionCode <= 0L || downloadUrl.isBlank()) {
+        return null
+    }
+    val notes = buildList {
+        val array = payload.optJSONArray("notes") ?: JSONArray()
+        for (index in 0 until array.length()) {
+            val value = array.optString(index).trim()
+            if (value.isNotBlank()) {
+                add(value)
+            }
+        }
+    }
+    return AndroidAppUpdateRelease(
+        id = id,
+        title = title,
+        versionName = versionName,
+        versionCode = versionCode,
+        coverUrl = payload.optString("coverUrl").trim().ifBlank { null },
+        downloadUrl = downloadUrl,
+        notes = notes
+    )
+}
+
+private fun fetchLatestAndroidAppUpdate(
+    baseUrl: String,
+    currentVersionCode: Long
+): AndroidAppUpdateState? {
+    val normalizedBase = baseUrl.trim().ifBlank { "https://api.corebrew.ru" }.trimEnd('/')
+    val requestUrl = "$normalizedBase/api/app-updates/android/latest?channel=stable&currentVersionCode=$currentVersionCode"
+    return runCatching {
+        val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            connectTimeout = 20_000
+            readTimeout = 20_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+        }
+        connection.connect()
+        val status = connection.responseCode
+        val raw = if (status in 200..299) {
+            connection.inputStream.use { it.readBytes().toString(StandardCharsets.UTF_8) }
+        } else {
+            connection.errorStream?.use { it.readBytes().toString(StandardCharsets.UTF_8) }.orEmpty()
+        }
+        connection.disconnect()
+        if (status !in 200..299 || raw.isBlank()) {
+            return@runCatching AndroidAppUpdateState(
+                checking = false,
+                statusMessage = "Could not check for updates"
+            )
+        }
+        val payload = JSONObject(raw)
+        val latestRelease = parseAndroidAppUpdateRelease(payload.optJSONObject("latest"))
+        val updateAvailable = payload.optBoolean("updateAvailable", false) && latestRelease != null
+        val statusMessage = when {
+            latestRelease == null -> "No published updates yet"
+            updateAvailable -> "Version ${latestRelease.versionName} is available"
+            else -> "You're using latest version"
+        }
+        AndroidAppUpdateState(
+            checking = false,
+            latestRelease = latestRelease,
+            updateAvailable = updateAvailable,
+            statusMessage = statusMessage
+        )
+    }.getOrNull()
+}
+
+private suspend fun downloadAndroidAppUpdateApk(
+    context: Context,
+    release: AndroidAppUpdateRelease,
+    onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit
+): File? = withContext(Dispatchers.IO) {
+    val updatesDir = File(context.cacheDir, "updates/${release.id}").apply { mkdirs() }
+    val tempFile = File(updatesDir, "update.part")
+    val apkFile = File(updatesDir, "sonora-${release.versionCode}.apk")
+    if (tempFile.exists()) {
+        tempFile.delete()
+    }
+
+    val connection = (URL(release.downloadUrl).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        instanceFollowRedirects = true
+        connectTimeout = 30_000
+        readTimeout = 120_000
+        setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+    }
+
+    try {
+        connection.connect()
+        if (connection.responseCode !in 200..299) {
+            return@withContext null
+        }
+        val totalBytes = connection.contentLengthLong.coerceAtLeast(0L)
+        connection.inputStream.use { input ->
+            tempFile.outputStream().use { output ->
+                val buffer = ByteArray(64 * 1024)
+                var downloadedBytes = 0L
+                while (true) {
+                    if (kotlin.coroutines.coroutineContext[Job]?.isActive == false) {
+                        throw java.util.concurrent.CancellationException()
+                    }
+                    val read = input.read(buffer)
+                    if (read <= 0) {
+                        break
+                    }
+                    output.write(buffer, 0, read)
+                    downloadedBytes += read
+                    onProgress(downloadedBytes, totalBytes)
+                }
+                output.flush()
+            }
+        }
+        if (apkFile.exists()) {
+            apkFile.delete()
+        }
+        if (!tempFile.renameTo(apkFile)) {
+            tempFile.copyTo(apkFile, overwrite = true)
+            tempFile.delete()
+        }
+        apkFile
+    } catch (cancelError: java.util.concurrent.CancellationException) {
+        tempFile.delete()
+        throw cancelError
+    } catch (_: Exception) {
+        tempFile.delete()
+        null
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun installDownloadedApk(context: Context, apkFile: File): Boolean {
+    return runCatching {
+        if (!apkFile.exists()) {
+            return@runCatching false
+        }
+
+        val contentUri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            apkFile
+        )
+        val intents = listOf(
+            Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                setDataAndType(contentUri, "application/vnd.android.package-archive")
+                clipData = ClipData.newUri(context.contentResolver, apkFile.name, contentUri)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            },
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(contentUri, "application/vnd.android.package-archive")
+                clipData = ClipData.newUri(context.contentResolver, apkFile.name, contentUri)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        )
+        intents.forEach { intent ->
+            val resolvers = context.packageManager.queryIntentActivities(intent, 0)
+            if (resolvers.isNotEmpty() || intent.resolveActivity(context.packageManager) != null) {
+                resolvers.forEach { resolveInfo ->
+                    context.grantUriPermission(
+                        resolveInfo.activityInfo.packageName,
+                        contentUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+                val opened = runCatching {
+                    context.startActivity(intent)
+                    true
+                }.getOrDefault(false)
+                if (opened) {
+                    return@runCatching true
+                }
+            }
+        }
+        false
+    }.getOrDefault(false)
+}
+
+private fun resolveAppVersionCode(context: Context): Long {
+    val packageInfo = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    }.getOrNull() ?: return 0L
+
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        packageInfo.longVersionCode
+    } else {
+        @Suppress("DEPRECATION")
+        packageInfo.versionCode.toLong()
     }
 }
 
