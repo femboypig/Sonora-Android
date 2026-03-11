@@ -10258,14 +10258,14 @@ private fun defaultWavePalette(): List<Color> {
 }
 
 private val artworkCacheLock = Any()
-private val artworkCache = object : LinkedHashMap<String, androidx.compose.ui.graphics.ImageBitmap>(180, 0.75f, true) {
+private val artworkCache = object : LinkedHashMap<String, androidx.compose.ui.graphics.ImageBitmap>(96, 0.75f, true) {
     override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, androidx.compose.ui.graphics.ImageBitmap>?): Boolean {
-        return size > 180
+        return size > 96
     }
 }
 private val artworkMissingCache = object : LinkedHashSet<String>() {
     override fun add(element: String): Boolean {
-        if (size >= 360) {
+        if (size >= 192) {
             val first = firstOrNull()
             if (first != null) {
                 remove(first)
@@ -10337,6 +10337,14 @@ private fun isRemoteArtworkPath(path: String): Boolean {
         path.startsWith("https://", ignoreCase = true)
 }
 
+private fun preferredArtworkBitmapConfig(maxSize: Int): android.graphics.Bitmap.Config {
+    return if (maxSize <= 512) {
+        android.graphics.Bitmap.Config.RGB_565
+    } else {
+        android.graphics.Bitmap.Config.ARGB_8888
+    }
+}
+
 private fun decodeRemoteArtworkBitmapRaw(path: String, maxSize: Int = 1024): android.graphics.Bitmap? {
     return runCatching {
         val connection = (URL(path).openConnection() as HttpURLConnection).apply {
@@ -10369,7 +10377,7 @@ private fun decodeRemoteArtworkBitmapRaw(path: String, maxSize: Int = 1024): and
         }
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
-            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+            inPreferredConfig = preferredArtworkBitmapConfig(maxSize)
         }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }.getOrNull()
@@ -10401,7 +10409,7 @@ private fun decodeArtworkBitmap(path: String, maxSize: Int = 1024): androidx.com
 
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
-            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+            inPreferredConfig = preferredArtworkBitmapConfig(maxSize)
         }
         BitmapFactory.decodeFile(file.absolutePath, options)?.asImageBitmap()
     }.getOrNull()
@@ -10433,7 +10441,7 @@ private fun decodeArtworkBitmapRaw(path: String, maxSize: Int = 1024): android.g
 
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
-            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+            inPreferredConfig = preferredArtworkBitmapConfig(maxSize)
         }
         BitmapFactory.decodeFile(file.absolutePath, options)
     }.getOrNull()
@@ -10469,7 +10477,7 @@ private fun decodeEmbeddedArtworkBitmap(
 
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
-            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+            inPreferredConfig = preferredArtworkBitmapConfig(maxSize)
         }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
     } catch (_: Exception) {
@@ -10513,7 +10521,7 @@ private fun decodeEmbeddedArtworkBitmapRaw(
 
         val options = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
-            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+            inPreferredConfig = preferredArtworkBitmapConfig(maxSize)
         }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     } catch (_: Exception) {
