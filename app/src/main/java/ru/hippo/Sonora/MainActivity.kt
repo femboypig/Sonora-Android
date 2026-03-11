@@ -768,6 +768,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     var sharedPlaylistImporting by remember { mutableStateOf(false) }
     var sharedPlaylistImportingMessage by remember { mutableStateOf("Saving tracks to library...") }
     var androidAppUpdateState by remember { mutableStateOf(AndroidAppUpdateState()) }
+    var lastShownCompletedAppUpdateDownloadId by rememberSaveable { mutableLongStateOf(-1L) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     fun mergeAndroidAppUpdateState(
@@ -851,6 +852,20 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 break
             }
             delay(500L)
+        }
+    }
+
+    LaunchedEffect(androidAppUpdateState.downloadId, androidAppUpdateState.downloadReady) {
+        val readyDownloadId = androidAppUpdateState.downloadId ?: return@LaunchedEffect
+        if (!androidAppUpdateState.downloadReady || lastShownCompletedAppUpdateDownloadId == readyDownloadId) {
+            return@LaunchedEffect
+        }
+        val snapshot = withContext(Dispatchers.IO) {
+            readAndroidAppUpdateDownloadSnapshot(context, readyDownloadId)
+        } ?: return@LaunchedEffect
+        if (snapshot.status == DownloadManager.STATUS_SUCCESSFUL) {
+            showAndroidAppUpdateReadyNotification(context, snapshot)
+            lastShownCompletedAppUpdateDownloadId = readyDownloadId
         }
     }
     val applySharedPlaylistProgressUpdate: (SharedPlaylistEntry) -> Unit = { updatedEntry ->
