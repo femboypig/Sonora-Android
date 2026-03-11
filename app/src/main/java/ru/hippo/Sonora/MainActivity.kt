@@ -8118,8 +8118,29 @@ private fun AndroidAppUpdateCard(
     onUpdate: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Spacer(modifier = Modifier.height(2.dp))
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Spacer(modifier = Modifier.height(4.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(28.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
+                shape = RoundedCornerShape(28.dp)
+            )
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "New build",
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.6.sp
+            ),
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -8127,8 +8148,8 @@ private fun AndroidAppUpdateCard(
             StaticUpdateCover(
                 bitmap = coverBitmap,
                 modifier = Modifier
-                    .size(58.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(18.dp))
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -8147,7 +8168,7 @@ private fun AndroidAppUpdateCard(
                     text = "Version ${release.versionName} (${release.versionCode})",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Normal
+                        fontWeight = FontWeight.Medium
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -8227,9 +8248,9 @@ private fun AndroidAppUpdateCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(999.dp))
-                .background(if (updateState.downloading) Color(0xFFFF3B30) else Color(0xFF0A84FF))
+                .background(if (updateState.downloading) Color(0xFFD93025) else MaterialTheme.colorScheme.primary)
                 .clickable(onClick = if (updateState.downloading) onCancel else onUpdate)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 18.dp, vertical = 12.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
