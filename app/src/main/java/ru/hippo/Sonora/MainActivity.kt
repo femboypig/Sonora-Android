@@ -6330,7 +6330,7 @@ private fun MyWaveContoursBackground(
             withFrameNanos { frameNanos ->
                 if (lastFrameNanos != 0L) {
                     val deltaSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
-                    val speed = if (isPlaying) 0.26f else 0.08f
+                    val speed = if (isPlaying) 0.17f else 0.05f
                     contourClock += deltaSeconds * speed
                     val time = contourClock
                     val tau = (Math.PI * 2.0).toFloat()
@@ -6364,36 +6364,36 @@ private fun MyWaveContoursBackground(
                         val envelope = (1.0f - kotlin.math.abs(progress - 0.5f) * 1.10f).coerceAtLeast(0.36f)
                         val prev = targetPressure.getOrElse(index - 1) { targetPressure[index] }
                         val next = targetPressure.getOrElse(index + 1) { targetPressure[index] }
-                        val neighborPressure = (((prev + next) * 0.5f) - targetPressure[index]) * 1.34f
+                        val neighborPressure = (((prev + next) * 0.5f) - targetPressure[index]) * 1.72f
                         val ringA = sin(((time * (0.21f + (progress * 0.018f))) + ringSeed).toDouble()).toFloat()
                         val ringB = cos(((time * (0.16f + (progress * 0.013f))) - (ringSeed * 0.63f)).toDouble()).toFloat()
                         val ringC = sin(((time * (0.12f + (progress * 0.010f))) + (ringSeed * 0.47f)).toDouble()).toFloat()
                         val motion = if (isPlaying) 1.0f else 0.62f
                         val targetDriftX =
-                            ((sharedLift * 0.08f) + (ringA * 0.06f) - (ringB * 0.03f) + (neighborPressure * 0.06f)) *
+                            ((sharedLift * 0.06f) + (ringA * 0.04f) - (ringB * 0.02f) + (neighborPressure * 0.05f)) *
                                 envelope *
                                 motion
                         val targetDriftY =
-                            ((targetPressure[index] * 0.42f) + (neighborPressure * 0.52f) + (ringB * 0.06f)) *
+                            ((targetPressure[index] * 0.32f) + (neighborPressure * 0.62f) + (ringB * 0.04f)) *
                                 envelope *
                                 motion
                         val targetRadiusWarpX =
-                            ((targetPressure[index] * 0.18f) + (neighborPressure * 0.28f) + (ringA * 0.04f)) *
+                            ((targetPressure[index] * 0.24f) + (neighborPressure * 0.42f) + (ringA * 0.03f)) *
                                 envelope *
                                 motion
                         val targetRadiusWarpY =
-                            ((-targetPressure[index] * 0.16f) - (neighborPressure * 0.24f) + (ringC * 0.05f)) *
+                            ((-targetPressure[index] * 0.22f) - (neighborPressure * 0.36f) + (ringC * 0.04f)) *
                                 envelope *
                                 motion
                         val targetWobble =
-                            ((sharedCompression * 0.10f) + (ringA * 0.18f) + (ringB * 0.08f) + (ringC * 0.04f)) *
+                            ((sharedCompression * 0.06f) + (ringA * 0.14f) + (ringB * 0.05f) + (ringC * 0.03f)) *
                                 envelope *
                                 motion
-                        stepSpring(ringDriftX, ringDriftXVelocity, index, targetDriftX, 9.4f, deltaSeconds)
-                        stepSpring(ringDriftY, ringDriftYVelocity, index, targetDriftY, 10.6f, deltaSeconds)
-                        stepSpring(ringRadiusWarpX, ringRadiusWarpXVelocity, index, targetRadiusWarpX, 8.8f, deltaSeconds)
-                        stepSpring(ringRadiusWarpY, ringRadiusWarpYVelocity, index, targetRadiusWarpY, 8.6f, deltaSeconds)
-                        stepSpring(ringWobble, ringWobbleVelocity, index, targetWobble, 9.2f, deltaSeconds)
+                        stepSpring(ringDriftX, ringDriftXVelocity, index, targetDriftX, 7.2f, deltaSeconds)
+                        stepSpring(ringDriftY, ringDriftYVelocity, index, targetDriftY, 8.0f, deltaSeconds)
+                        stepSpring(ringRadiusWarpX, ringRadiusWarpXVelocity, index, targetRadiusWarpX, 7.4f, deltaSeconds)
+                        stepSpring(ringRadiusWarpY, ringRadiusWarpYVelocity, index, targetRadiusWarpY, 7.2f, deltaSeconds)
+                        stepSpring(ringWobble, ringWobbleVelocity, index, targetWobble, 7.6f, deltaSeconds)
                     }
                 }
                 lastFrameNanos = frameNanos
@@ -6415,8 +6415,8 @@ private fun MyWaveContoursBackground(
         val macroC = (driverA * driverB * 0.26f) + (driverC * 0.40f) + (driverD * 0.34f)
         val audioLift = ((((phaseA - phaseB) * 0.5f) + 0.5f).coerceIn(0f, 1f) - 0.5f) * 0.08f
         val center = Offset(
-            x = (size.width * 0.5f) + ((macroA * 0.62f) + (macroC * 0.24f)) * size.width * 0.004f * motion,
-            y = (size.height * 0.53f) + (((macroB * 0.58f) + (macroC * 0.24f)) + audioLift) * size.height * 0.006f * motion
+            x = (size.width * 0.5f) + ((macroA * 0.62f) + (macroC * 0.24f)) * size.width * 0.0028f * motion,
+            y = (size.height * 0.53f) + (((macroB * 0.58f) + (macroC * 0.24f)) + audioLift) * size.height * 0.0044f * motion
         )
         val haloRadius = size.minDimension * (0.35f + ((pulsar - 0.92f) * 0.11f))
         drawCircle(
@@ -6453,7 +6453,11 @@ private fun MyWaveContoursBackground(
         val palette = listOf(c0, c1, c2, c3)
         repeat(ringCount) { index ->
             val progress = index / (ringCount - 1f)
-            val ringPhase = seedPhase + (progress * 1.15f) + (t * (0.14f + (progress * 0.012f)))
+            val ringPhase =
+                seedPhase +
+                    (progress * 1.15f) +
+                    (t * (0.08f + (progress * 0.008f))) +
+                    (sin(((t * 0.13f) + (progress * 1.4f) + seedPhase).toDouble()).toFloat() * 0.42f)
             val ringCenterX =
                 center.x +
                     sin(((ringPhase * 0.72f) + (macroA * 0.14f)).toDouble()).toFloat() * size.width * 0.018f +
@@ -6499,16 +6503,16 @@ private fun MyWaveContoursBackground(
             }
 
             val linePalette = listOf(
-                if (lightTheme) blendColors(c3, Color.White, 0.14f) else blendColors(c3, Color.White, 0.06f),
-                if (lightTheme) blendColors(c1, Color.White, 0.20f) else blendColors(c1, Color.White, 0.08f),
-                if (lightTheme) blendColors(c2, Color.White, 0.16f) else blendColors(c2, Color.White, 0.06f),
-                if (lightTheme) blendColors(c0, Color.White, 0.10f) else blendColors(c0, Color.White, 0.02f)
+                if (lightTheme) blendColors(c3, Color.White, 0.24f) else blendColors(c3, Color.White, 0.12f),
+                if (lightTheme) blendColors(c1, Color.White, 0.30f) else blendColors(c1, Color.White, 0.16f),
+                if (lightTheme) blendColors(c2, Color.White, 0.26f) else blendColors(c2, Color.White, 0.14f),
+                if (lightTheme) blendColors(c0, Color.White, 0.18f) else blendColors(c0, Color.White, 0.08f)
             )
             val base = linePalette[index % linePalette.size]
             val alpha = if (lightTheme) {
-                if (index < 3) 0.88f else 0.68f
+                if (index < 3) 0.96f else 0.76f
             } else {
-                if (index < 3) 1.0f else 0.82f
+                if (index < 3) 1.0f else 0.88f
             }
             val lineColor = base.copy(alpha = alpha)
             val lineBrush = Brush.linearGradient(
@@ -6525,13 +6529,13 @@ private fun MyWaveContoursBackground(
                 path = contour,
                 color = lineColor.copy(
                     alpha = if (lightTheme) {
-                        if (index < 3) 0.16f else 0.08f
+                        if (index < 3) 0.22f else 0.11f
                     } else {
-                        if (index < 3) 0.26f else 0.14f
+                        if (index < 3) 0.34f else 0.18f
                     }
                 ),
                 style = Stroke(
-                    width = size.minDimension * (0.0125f - (progress * 0.0008f)),
+                    width = size.minDimension * (0.0134f - (progress * 0.00085f)),
                     cap = StrokeCap.Round,
                     join = androidx.compose.ui.graphics.StrokeJoin.Round
                 )
@@ -6540,7 +6544,7 @@ private fun MyWaveContoursBackground(
                 path = contour,
                 brush = lineBrush,
                 style = Stroke(
-                    width = size.minDimension * (0.0072f - (progress * 0.00055f)),
+                    width = size.minDimension * (0.0076f - (progress * 0.00055f)),
                     cap = StrokeCap.Round,
                     join = androidx.compose.ui.graphics.StrokeJoin.Round
                 )
