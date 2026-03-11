@@ -1,6 +1,7 @@
 package ru.hippo.Sonora
 
 import android.Manifest
+import android.app.DownloadManager
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
@@ -10,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
@@ -142,6 +144,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -178,6 +181,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import ru.hippo.Sonora.music.MiniStreamingArtist
 import ru.hippo.Sonora.music.MiniStreamingClient
 import ru.hippo.Sonora.music.MiniStreamingDownloadPayload
@@ -318,7 +323,7 @@ private data class SonoraAppSettings(
     val onlinePlaylistCacheMaxMb: Int = 1024
 )
 
-private data class AndroidAppUpdateRelease(
+data class AndroidAppUpdateRelease(
     val id: String,
     val title: String,
     val versionName: String,
@@ -334,7 +339,19 @@ private data class AndroidAppUpdateState(
     val updateAvailable: Boolean = false,
     val statusMessage: String? = null,
     val downloading: Boolean = false,
-    val downloadProgress: Float = 0f
+    val downloadProgress: Float = 0f,
+    val downloadId: Long? = null,
+    val downloadedApkPath: String? = null,
+    val downloadReady: Boolean = false
+)
+
+data class AndroidAppUpdateDownloadSnapshot(
+    val release: AndroidAppUpdateRelease,
+    val downloadId: Long,
+    val apkPath: String,
+    val status: Int,
+    val downloadedBytes: Long,
+    val totalBytes: Long
 )
 
 private data class PlaybackSessionSnapshot(
@@ -658,6 +675,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val playbackHistoryStore = remember(context) { PlaybackHistoryStore(context) }
     val settingsStore = remember(context) { SonoraSettingsStore(context) }
     val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
     val appVersionLabel = remember(context) { resolveAppVersionLabel(context) }
     val appVersionCode = remember(context) { resolveAppVersionCode(context) }
@@ -750,8 +768,91 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     var sharedPlaylistImporting by remember { mutableStateOf(false) }
     var sharedPlaylistImportingMessage by remember { mutableStateOf("Saving tracks to library...") }
     var androidAppUpdateState by remember { mutableStateOf(AndroidAppUpdateState()) }
-    var androidAppUpdateDownloadJob by remember { mutableStateOf<Job?>(null) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    fun mergeAndroidAppUpdateState(
+        base: AndroidAppUpdateState,
+        snapshot: AndroidAppUpdateDownloadSnapshot?
+    ): AndroidAppUpdateState {
+        if (snapshot == null) {
+            return base.copy(
+                downloading = false,
+                downloadProgress = 0f,
+                downloadId = null,
+                downloadedApkPath = null,
+                downloadReady = false
+            )
+        }
+        val progress = if (snapshot.totalBytes > 0L) {
+            (snapshot.downloadedBytes.toFloat() / snapshot.totalBytes.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+        val downloading = snapshot.status == DownloadManager.STATUS_RUNNING ||
+            snapshot.status == DownloadManager.STATUS_PENDING ||
+            snapshot.status == DownloadManager.STATUS_PAUSED
+        val ready = snapshot.status == DownloadManager.STATUS_SUCCESSFUL &&
+            snapshot.apkPath.isNotBlank() &&
+            File(snapshot.apkPath).exists()
+        val statusMessage = when {
+            ready -> "Download complete. Return to Sonora and tap Install update."
+            downloading && snapshot.totalBytes > 0L -> "Downloading ${(progress * 100f).roundToInt()}%"
+            downloading -> "Downloading update..."
+            snapshot.status == DownloadManager.STATUS_FAILED -> "Could not download update"
+            else -> base.statusMessage
+        }
+        return base.copy(
+            latestRelease = snapshot.release,
+            updateAvailable = snapshot.release.versionCode > appVersionCode,
+            statusMessage = statusMessage,
+            downloading = downloading,
+            downloadProgress = progress,
+            downloadId = snapshot.downloadId,
+            downloadedApkPath = snapshot.apkPath.takeIf { it.isNotBlank() },
+            downloadReady = ready
+        )
+    }
+
+    fun refreshAndroidAppUpdateDownloadState() {
+        val snapshot = readAndroidAppUpdateDownloadSnapshot(context)
+        androidAppUpdateState = mergeAndroidAppUpdateState(androidAppUpdateState, snapshot)
+    }
+
+    LaunchedEffect(Unit) {
+        refreshAndroidAppUpdateDownloadState()
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                refreshAndroidAppUpdateDownloadState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(androidAppUpdateState.downloadId, androidAppUpdateState.downloading) {
+        val activeDownloadId = androidAppUpdateState.downloadId ?: return@LaunchedEffect
+        if (!androidAppUpdateState.downloading) {
+            return@LaunchedEffect
+        }
+        while (true) {
+            val snapshot = withContext(Dispatchers.IO) {
+                readAndroidAppUpdateDownloadSnapshot(context, activeDownloadId)
+            }
+            androidAppUpdateState = mergeAndroidAppUpdateState(androidAppUpdateState, snapshot)
+            if (snapshot == null ||
+                snapshot.status == DownloadManager.STATUS_SUCCESSFUL ||
+                snapshot.status == DownloadManager.STATUS_FAILED
+            ) {
+                break
+            }
+            delay(500L)
+        }
+    }
     val applySharedPlaylistProgressUpdate: (SharedPlaylistEntry) -> Unit = { updatedEntry ->
         val sanitized = sanitizeSharedPlaylistEntry(updatedEntry)
         likedSharedPlaylists = buildList {
@@ -3406,12 +3507,16 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                                         currentVersionCode = appVersionCode
                                     )
                                 }
-                                androidAppUpdateState = fetched ?: AndroidAppUpdateState(
+                                val baseState = fetched ?: AndroidAppUpdateState(
                                     checking = false,
                                     latestRelease = androidAppUpdateState.latestRelease,
                                     updateAvailable = false,
                                     statusMessage = "Could not check for updates"
                                 )
+                                val snapshot = withContext(Dispatchers.IO) {
+                                    readAndroidAppUpdateDownloadSnapshot(context)
+                                }
+                                androidAppUpdateState = mergeAndroidAppUpdateState(baseState, snapshot)
                                 if (fetched?.updateAvailable == true) {
                                     snackbarHostState.showSnackbar("Update found")
                                 } else if (fetched != null) {
@@ -3420,84 +3525,61 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                             }
                         },
                         onInstallUpdate = { release ->
-                            val job = scope.launch {
-                                androidAppUpdateState = androidAppUpdateState.copy(
-                                    downloading = true,
-                                    downloadProgress = 0f,
-                                    statusMessage = "Downloading ${release.versionName}..."
-                                )
-                                try {
-                                    val apkFile = withContext(Dispatchers.IO) {
-                                        downloadAndroidAppUpdateApk(
-                                            context = context,
-                                            release = release,
-                                            onProgress = { downloadedBytes, totalBytes ->
-                                                mainHandler.post {
-                                                    val progress = if (totalBytes > 0L) {
-                                                        (downloadedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
-                                                    } else {
-                                                        0f
-                                                    }
-                                                    androidAppUpdateState = androidAppUpdateState.copy(
-                                                        downloading = true,
-                                                        downloadProgress = progress,
-                                                        statusMessage = if (totalBytes > 0L) {
-                                                            "Downloading ${(progress * 100f).roundToInt()}%"
-                                                        } else {
-                                                            "Downloading update..."
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        )
+                            scope.launch {
+                                val readyPath = androidAppUpdateState.downloadedApkPath
+                                if (androidAppUpdateState.downloadReady && !readyPath.isNullOrBlank()) {
+                                    val installerOpened = installDownloadedApk(uiContext, File(readyPath))
+                                    androidAppUpdateState = androidAppUpdateState.copy(
+                                        statusMessage = if (installerOpened) {
+                                            "Installer opened"
+                                        } else {
+                                            "Could not open installer"
+                                        }
+                                    )
+                                    if (!installerOpened) {
+                                        snackbarHostState.showSnackbar("Could not open installer")
                                     }
-                                    androidAppUpdateDownloadJob = null
-                                    if (apkFile == null) {
+                                } else {
+                                    val snapshot = withContext(Dispatchers.IO) {
+                                        enqueueAndroidAppUpdateDownload(context, release)
+                                    }
+                                    if (snapshot == null) {
                                         androidAppUpdateState = androidAppUpdateState.copy(
                                             downloading = false,
                                             downloadProgress = 0f,
-                                            statusMessage = "Could not download update"
+                                            statusMessage = "Could not start download"
                                         )
-                                        snackbarHostState.showSnackbar("Could not download update")
+                                        snackbarHostState.showSnackbar("Could not start download")
                                     } else {
-                                        androidAppUpdateState = androidAppUpdateState.copy(
-                                            downloading = false,
-                                            downloadProgress = 1f,
-                                            statusMessage = "Opening installer..."
+                                        androidAppUpdateState = mergeAndroidAppUpdateState(
+                                            androidAppUpdateState.copy(
+                                                latestRelease = release,
+                                                statusMessage = "Downloading ${release.versionName}..."
+                                            ),
+                                            snapshot
                                         )
-                                        val installerOpened = installDownloadedApk(uiContext, apkFile)
-                                        androidAppUpdateState = androidAppUpdateState.copy(
-                                            downloading = false,
-                                            downloadProgress = if (installerOpened) 1f else 0f,
-                                            statusMessage = if (installerOpened) {
-                                                "Opening installer..."
-                                            } else {
-                                                "Could not open installer"
-                                            }
-                                        )
-                                        if (!installerOpened) {
-                                            snackbarHostState.showSnackbar("Could not open installer")
-                                        }
+                                        snackbarHostState.showSnackbar("Update download started in background")
                                     }
-                                } catch (_: java.util.concurrent.CancellationException) {
-                                    androidAppUpdateDownloadJob = null
-                                    androidAppUpdateState = androidAppUpdateState.copy(
-                                        downloading = false,
-                                        downloadProgress = 0f,
-                                        statusMessage = "Update download canceled"
-                                    )
                                 }
                             }
-                            androidAppUpdateDownloadJob = job
                         },
                         onCancelUpdateDownload = {
-                            androidAppUpdateDownloadJob?.cancel()
-                            androidAppUpdateDownloadJob = null
-                            androidAppUpdateState = androidAppUpdateState.copy(
-                                downloading = false,
-                                downloadProgress = 0f,
-                                statusMessage = "Update download canceled"
-                            )
+                            scope.launch {
+                                val canceled = withContext(Dispatchers.IO) {
+                                    cancelAndroidAppUpdateDownload(context, androidAppUpdateState.downloadId)
+                                }
+                                androidAppUpdateState = androidAppUpdateState.copy(
+                                    downloading = false,
+                                    downloadProgress = 0f,
+                                    downloadId = null,
+                                    downloadedApkPath = null,
+                                    downloadReady = false,
+                                    statusMessage = if (canceled) "Update download canceled" else "No active update download"
+                                )
+                                withContext(Dispatchers.IO) {
+                                    clearAndroidAppUpdateDownloadState(context)
+                                }
+                            }
                         },
                         onOpenGithub = {
                             openExternalUrl(uiContext, githubProjectURL)
@@ -8101,11 +8183,14 @@ private fun AndroidAppUpdateCard(
 
         if (updateState.downloading) {
             Spacer(modifier = Modifier.height(14.dp))
-            WaveDownloadProgressBar(
+            LinearProgressIndicator(
                 progress = updateState.downloadProgress.coerceIn(0f, 1f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(18.dp)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(999.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
@@ -8139,70 +8224,16 @@ private fun AndroidAppUpdateCard(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = if (updateState.downloading) "Cancel" else "Update",
+                text = when {
+                    updateState.downloading -> "Cancel"
+                    updateState.downloadReady -> "Install update"
+                    else -> "Download update"
+                },
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
                 color = Color.White
-            )
-        }
-    }
-}
-
-@Composable
-private fun WaveDownloadProgressBar(
-    progress: Float,
-    modifier: Modifier = Modifier
-) {
-    val infiniteTransition = rememberInfiniteTransition(label = "update_wave_progress")
-    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-    val waveShift by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1700, easing = LinearEasing)
-        ),
-        label = "update_wave_progress_shift"
-    )
-    Canvas(modifier = modifier) {
-        val progressValue = progress.coerceIn(0f, 1f)
-        val centerY = size.height * 0.5f
-        val lineHeight = 2.dp.toPx()
-        val activeWidth = size.width * progressValue
-        val wavelength = 22.dp.toPx()
-        val amplitude = 2.6.dp.toPx()
-        val step = 2.dp.toPx().coerceAtLeast(1f)
-        val phaseOffset = waveShift * (Math.PI.toFloat() * 2f)
-
-        drawRoundRect(
-            color = trackColor,
-            topLeft = Offset(0f, centerY - (lineHeight * 0.5f)),
-            size = Size(size.width, lineHeight),
-            cornerRadius = CornerRadius(lineHeight * 0.5f, lineHeight * 0.5f)
-        )
-
-        if (activeWidth > 0f) {
-            val wavePath = Path()
-            var x = 0f
-            wavePath.moveTo(0f, centerY)
-            while (x <= activeWidth) {
-                val y = centerY + (sin(((x / wavelength) * (Math.PI.toFloat() * 2f) + phaseOffset).toDouble()).toFloat() * amplitude)
-                wavePath.lineTo(x, y)
-                x += step
-            }
-            drawPath(
-                path = wavePath,
-                brush = Brush.linearGradient(
-                    colors = listOf(
-                        Color(0xFF3EA2FF),
-                        Color(0xFF0A84FF),
-                        Color(0xFF69B9FF)
-                    ),
-                    start = Offset(0f, centerY),
-                    end = Offset(activeWidth.coerceAtLeast(1f), centerY)
-                ),
-                style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round)
             )
         }
     }
@@ -11914,67 +11945,111 @@ private fun fetchLatestAndroidAppUpdate(
     }.getOrNull()
 }
 
-private suspend fun downloadAndroidAppUpdateApk(
+private const val APP_UPDATE_DOWNLOAD_PREFS = "android_app_update_download"
+private const val APP_UPDATE_DOWNLOAD_ID_KEY = "download_id"
+private const val APP_UPDATE_RELEASE_ID_KEY = "release_id"
+private const val APP_UPDATE_RELEASE_TITLE_KEY = "release_title"
+private const val APP_UPDATE_RELEASE_VERSION_NAME_KEY = "release_version_name"
+private const val APP_UPDATE_RELEASE_VERSION_CODE_KEY = "release_version_code"
+private const val APP_UPDATE_RELEASE_COVER_URL_KEY = "release_cover_url"
+private const val APP_UPDATE_RELEASE_DOWNLOAD_URL_KEY = "release_download_url"
+private const val APP_UPDATE_RELEASE_NOTES_KEY = "release_notes_json"
+private const val APP_UPDATE_APK_PATH_KEY = "apk_path"
+
+private fun appUpdateDownloadPrefs(context: Context) =
+    context.getSharedPreferences(APP_UPDATE_DOWNLOAD_PREFS, Context.MODE_PRIVATE)
+
+fun clearAndroidAppUpdateDownloadState(context: Context) {
+    appUpdateDownloadPrefs(context).edit().clear().apply()
+}
+
+fun cancelAndroidAppUpdateDownload(context: Context, downloadId: Long?): Boolean {
+    val activeDownloadId = downloadId ?: return false
+    val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return false
+    return manager.remove(activeDownloadId) > 0L
+}
+
+fun enqueueAndroidAppUpdateDownload(
     context: Context,
-    release: AndroidAppUpdateRelease,
-    onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit
-): File? = withContext(Dispatchers.IO) {
-    val updatesDir = File(context.cacheDir, "updates/${release.id}").apply { mkdirs() }
-    val tempFile = File(updatesDir, "update.part")
-    val apkFile = File(updatesDir, "sonora-${release.versionCode}.apk")
-    if (tempFile.exists()) {
-        tempFile.delete()
+    release: AndroidAppUpdateRelease
+): AndroidAppUpdateDownloadSnapshot? {
+    val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return null
+    val rootDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return null
+    val releaseDir = File(rootDir, "updates/${release.id}").apply { mkdirs() }
+    val apkFile = File(releaseDir, "sonora-${release.versionCode}.apk")
+    if (apkFile.exists()) {
+        apkFile.delete()
     }
-
-    val connection = (URL(release.downloadUrl).openConnection() as HttpURLConnection).apply {
-        requestMethod = "GET"
-        instanceFollowRedirects = true
-        connectTimeout = 30_000
-        readTimeout = 120_000
-        setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+    val request = DownloadManager.Request(Uri.parse(release.downloadUrl)).apply {
+        setTitle("Sonora ${release.versionName}")
+        setDescription("Downloading update in background")
+        setMimeType("application/vnd.android.package-archive")
+        addRequestHeader("User-Agent", "SonoraAndroid/1.0")
+        setAllowedOverMetered(true)
+        setAllowedOverRoaming(true)
+        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        setDestinationUri(Uri.fromFile(apkFile))
     }
+    val downloadId = runCatching { manager.enqueue(request) }.getOrNull() ?: return null
+    appUpdateDownloadPrefs(context).edit()
+        .putLong(APP_UPDATE_DOWNLOAD_ID_KEY, downloadId)
+        .putString(APP_UPDATE_RELEASE_ID_KEY, release.id)
+        .putString(APP_UPDATE_RELEASE_TITLE_KEY, release.title)
+        .putString(APP_UPDATE_RELEASE_VERSION_NAME_KEY, release.versionName)
+        .putLong(APP_UPDATE_RELEASE_VERSION_CODE_KEY, release.versionCode)
+        .putString(APP_UPDATE_RELEASE_COVER_URL_KEY, release.coverUrl)
+        .putString(APP_UPDATE_RELEASE_DOWNLOAD_URL_KEY, release.downloadUrl)
+        .putString(APP_UPDATE_RELEASE_NOTES_KEY, JSONArray(release.notes).toString())
+        .putString(APP_UPDATE_APK_PATH_KEY, apkFile.absolutePath)
+        .apply()
+    return readAndroidAppUpdateDownloadSnapshot(context, downloadId)
+}
 
-    try {
-        connection.connect()
-        if (connection.responseCode !in 200..299) {
-            return@withContext null
-        }
-        val totalBytes = connection.contentLengthLong.coerceAtLeast(0L)
-        connection.inputStream.use { input ->
-            tempFile.outputStream().use { output ->
-                val buffer = ByteArray(64 * 1024)
-                var downloadedBytes = 0L
-                while (true) {
-                    if (kotlin.coroutines.coroutineContext[Job]?.isActive == false) {
-                        throw java.util.concurrent.CancellationException()
+fun readAndroidAppUpdateDownloadSnapshot(
+    context: Context,
+    requestedDownloadId: Long? = null
+): AndroidAppUpdateDownloadSnapshot? {
+    val prefs = appUpdateDownloadPrefs(context)
+    val downloadId = requestedDownloadId
+        ?: prefs.getLong(APP_UPDATE_DOWNLOAD_ID_KEY, -1L).takeIf { it > 0L }
+        ?: return null
+    val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return null
+    val release = AndroidAppUpdateRelease(
+        id = prefs.getString(APP_UPDATE_RELEASE_ID_KEY, null).orEmpty(),
+        title = prefs.getString(APP_UPDATE_RELEASE_TITLE_KEY, null).orEmpty().ifBlank { "Sonora Android" },
+        versionName = prefs.getString(APP_UPDATE_RELEASE_VERSION_NAME_KEY, null).orEmpty().ifBlank { "Update" },
+        versionCode = prefs.getLong(APP_UPDATE_RELEASE_VERSION_CODE_KEY, 0L),
+        coverUrl = prefs.getString(APP_UPDATE_RELEASE_COVER_URL_KEY, null),
+        downloadUrl = prefs.getString(APP_UPDATE_RELEASE_DOWNLOAD_URL_KEY, null).orEmpty(),
+        notes = runCatching {
+            val raw = prefs.getString(APP_UPDATE_RELEASE_NOTES_KEY, null).orEmpty()
+            if (raw.isBlank()) {
+                emptyList()
+            } else {
+                val array = JSONArray(raw)
+                buildList {
+                    for (index in 0 until array.length()) {
+                        add(array.optString(index))
                     }
-                    val read = input.read(buffer)
-                    if (read <= 0) {
-                        break
-                    }
-                    output.write(buffer, 0, read)
-                    downloadedBytes += read
-                    onProgress(downloadedBytes, totalBytes)
                 }
-                output.flush()
             }
+        }.getOrDefault(emptyList())
+    )
+    val apkPath = prefs.getString(APP_UPDATE_APK_PATH_KEY, null).orEmpty()
+    val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId)) ?: return null
+    cursor.use {
+        if (!it.moveToFirst()) {
+            clearAndroidAppUpdateDownloadState(context)
+            return null
         }
-        if (apkFile.exists()) {
-            apkFile.delete()
-        }
-        if (!tempFile.renameTo(apkFile)) {
-            tempFile.copyTo(apkFile, overwrite = true)
-            tempFile.delete()
-        }
-        apkFile
-    } catch (cancelError: java.util.concurrent.CancellationException) {
-        tempFile.delete()
-        throw cancelError
-    } catch (_: Exception) {
-        tempFile.delete()
-        null
-    } finally {
-        connection.disconnect()
+        return AndroidAppUpdateDownloadSnapshot(
+            release = release,
+            downloadId = downloadId,
+            apkPath = apkPath,
+            status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
+            downloadedBytes = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
+            totalBytes = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)).coerceAtLeast(0L)
+        )
     }
 }
 
@@ -12004,22 +12079,19 @@ private fun installDownloadedApk(context: Context, apkFile: File): Boolean {
             }
         )
         intents.forEach { intent ->
-            val resolvers = context.packageManager.queryIntentActivities(intent, 0)
-            if (resolvers.isNotEmpty() || intent.resolveActivity(context.packageManager) != null) {
-                resolvers.forEach { resolveInfo ->
-                    context.grantUriPermission(
-                        resolveInfo.activityInfo.packageName,
-                        contentUri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                }
-                val opened = runCatching {
-                    context.startActivity(intent)
-                    true
-                }.getOrDefault(false)
-                if (opened) {
-                    return@runCatching true
-                }
+            context.packageManager.queryIntentActivities(intent, 0).forEach { resolveInfo ->
+                context.grantUriPermission(
+                    resolveInfo.activityInfo.packageName,
+                    contentUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            val opened = runCatching {
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+            if (opened) {
+                return@runCatching true
             }
         }
         false
