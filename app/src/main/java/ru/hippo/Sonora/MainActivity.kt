@@ -715,6 +715,9 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     var miniStreamingPlaybackQueue by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
     var miniStreamingActiveTrackId by rememberSaveable { mutableStateOf<String?>(null) }
     var miniStreamingResolvedPayloadByTrackId by remember {
+    var homeRecommendationsSessionSeed by rememberSaveable {
+        mutableIntStateOf((((System.currentTimeMillis() / 1000L) % 100_000L).toInt()).coerceAtLeast(1))
+    }
         mutableStateOf<Map<String, MiniStreamingDownloadPayload>>(emptyMap())
     }
     var miniStreamingPendingTrack by remember { mutableStateOf<TrackItem?>(null) }
@@ -743,9 +746,6 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                     add(sanitized)
                     replaced = true
                 } else {
-    var homeRecommendationsSessionSeed by rememberSaveable {
-        mutableIntStateOf((((System.currentTimeMillis() / 1000L) % 100_000L).toInt()).coerceAtLeast(1))
-    }
                     add(existing)
                 }
             }
