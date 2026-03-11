@@ -23,9 +23,27 @@ class TrackStore(private val context: Context) {
     private val tracksFile = File(context.filesDir, "sonora_tracks_v1.json")
     private val musicDir = File(context.filesDir, "Sonora").apply { mkdirs() }
     private val artworkDir = File(musicDir, "artwork").apply { mkdirs() }
+    private val trackStoreLock = Any()
+    @Volatile
+    private var cachedTracks: List<TrackItem>? = null
 
     fun loadTracks(): List<TrackItem> {
+        cachedTracks?.let { return it }
+        synchronized(trackStoreLock) {
+            cachedTracks?.let { return it }
+            return loadTracksFromDisk()
+        }
+    }
+
+    fun saveTracks(tracks: List<TrackItem>) {
+        synchronized(trackStoreLock) {
+            saveTracksInternal(tracks)
+        }
+    }
+
+    private fun loadTracksFromDisk(): List<TrackItem> {
         if (!tracksFile.exists()) {
+            cachedTracks = emptyList()
             return emptyList()
         }
         return try {
@@ -66,15 +84,18 @@ class TrackStore(private val context: Context) {
 
             val hadStaleItems = hydrated.size != array.length()
             if (hadStaleItems || migratedArtwork) {
-                saveTracks(hydrated)
+                saveTracksInternal(hydrated)
+            } else {
+                cachedTracks = hydrated
             }
             hydrated
         } catch (_: Exception) {
+            cachedTracks = emptyList()
             emptyList()
         }
     }
 
-    fun saveTracks(tracks: List<TrackItem>) {
+    private fun saveTracksInternal(tracks: List<TrackItem>) {
         val array = JSONArray()
         for (track in tracks) {
             val item = JSONObject()
@@ -89,6 +110,7 @@ class TrackStore(private val context: Context) {
             array.put(item)
         }
         tracksFile.writeText(array.toString())
+        cachedTracks = tracks.toList()
     }
 
     fun importTracks(uris: List<Uri>): ImportResult {

@@ -1452,16 +1452,26 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
 
     fun reloadPlaylists() {
-        userPlaylists = playlistStore.loadPlaylists()
+        scope.launch(Dispatchers.IO) {
+            val reloadedPlaylists = playlistStore.loadPlaylists()
+            withContext(Dispatchers.Main.immediate) {
+                userPlaylists = reloadedPlaylists
+            }
+        }
     }
 
     fun reloadSharedPlaylists() {
-        val reloadedSharedPlaylists = sharedPlaylistStore.loadPlaylists().map(::sanitizeSharedPlaylistEntry)
-        likedSharedPlaylists = reloadedSharedPlaylists
-        sharedPlaylistAudioCacheUsageBytes = sharedPlaylistStore.audioCacheUsageBytes()
-        openedTransientSharedPlaylist = openedTransientSharedPlaylist?.let { transient ->
-            reloadedSharedPlaylists.firstOrNull { it.remoteId == transient.remoteId || it.localId == transient.localId }
-                ?: transient
+        scope.launch(Dispatchers.IO) {
+            val reloadedSharedPlaylists = sharedPlaylistStore.loadPlaylists().map(::sanitizeSharedPlaylistEntry)
+            val cacheUsageBytes = sharedPlaylistStore.audioCacheUsageBytes()
+            withContext(Dispatchers.Main.immediate) {
+                likedSharedPlaylists = reloadedSharedPlaylists
+                sharedPlaylistAudioCacheUsageBytes = cacheUsageBytes
+                openedTransientSharedPlaylist = openedTransientSharedPlaylist?.let { transient ->
+                    reloadedSharedPlaylists.firstOrNull { it.remoteId == transient.remoteId || it.localId == transient.localId }
+                        ?: transient
+                }
+            }
         }
     }
 

@@ -38,9 +38,27 @@ class SharedPlaylistStore(context: Context) {
     private val coverCacheDir = File(cacheDir, "covers").apply { mkdirs() }
     private val artworkCacheDir = File(cacheDir, "artworks").apply { mkdirs() }
     private val audioCacheDir = File(cacheDir, "audio").apply { mkdirs() }
+    private val playlistStoreLock = Any()
+    @Volatile
+    private var cachedPlaylists: List<SharedPlaylistEntry>? = null
 
     fun loadPlaylists(): List<SharedPlaylistEntry> {
+        cachedPlaylists?.let { return it }
+        synchronized(playlistStoreLock) {
+            cachedPlaylists?.let { return it }
+            return loadPlaylistsFromDisk()
+        }
+    }
+
+    fun savePlaylists(playlists: List<SharedPlaylistEntry>) {
+        synchronized(playlistStoreLock) {
+            savePlaylistsInternal(playlists)
+        }
+    }
+
+    private fun loadPlaylistsFromDisk(): List<SharedPlaylistEntry> {
         if (!storeFile.exists()) {
+            cachedPlaylists = emptyList()
             return emptyList()
         }
         return runCatching {
@@ -95,10 +113,14 @@ class SharedPlaylistStore(context: Context) {
                     )
                 }
             }
-        }.getOrDefault(emptyList())
+        }.getOrElse {
+            emptyList()
+        }.also {
+            cachedPlaylists = it
+        }
     }
 
-    fun savePlaylists(playlists: List<SharedPlaylistEntry>) {
+    private fun savePlaylistsInternal(playlists: List<SharedPlaylistEntry>) {
         val array = JSONArray()
         playlists.forEach { entry ->
             val item = JSONObject()
@@ -129,6 +151,7 @@ class SharedPlaylistStore(context: Context) {
             array.put(item)
         }
         storeFile.writeText(array.toString())
+        cachedPlaylists = playlists.toList()
     }
 
     fun findByRemoteId(remoteId: String): SharedPlaylistEntry? {
