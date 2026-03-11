@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -5,6 +7,40 @@ plugins {
 
 fun String.escapeForBuildConfig(): String {
     return this.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
+val versionPropertiesFile = rootProject.file("version.properties")
+val versionProperties = Properties().apply {
+    if (versionPropertiesFile.exists()) {
+        versionPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun versionPropertyInt(name: String, defaultValue: Int): Int {
+    return versionProperties.getProperty(name)?.toIntOrNull() ?: defaultValue
+}
+
+val requestedTaskNames = gradle.startParameter.taskNames.map { it.lowercase() }
+val shouldAutoBumpVersion = requestedTaskNames.any {
+    it.contains("assemble") || it.contains("bundle") || it.contains("install")
+}
+
+var autoVersionMajor = versionPropertyInt("VERSION_MAJOR", 2)
+var autoVersionMinor = versionPropertyInt("VERSION_MINOR", 1)
+var autoVersionPatch = versionPropertyInt("VERSION_PATCH", 0)
+var autoVersionCode = versionPropertyInt("VERSION_CODE", 210)
+
+if (shouldAutoBumpVersion) {
+    autoVersionCode += 1
+    autoVersionPatch += 1
+    versionProperties["VERSION_MAJOR"] = autoVersionMajor.toString()
+    versionProperties["VERSION_MINOR"] = autoVersionMinor.toString()
+    versionProperties["VERSION_PATCH"] = autoVersionPatch.toString()
+    versionProperties["VERSION_CODE"] = autoVersionCode.toString()
+    versionPropertiesFile.parentFile?.mkdirs()
+    versionPropertiesFile.outputStream().use {
+        versionProperties.store(it, "Auto-updated by Gradle build")
+    }
 }
 
 android {
@@ -19,8 +55,8 @@ android {
         applicationId = "ru.hippo.Sonora"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = autoVersionCode
+        versionName = "$autoVersionMajor.$autoVersionMinor.$autoVersionPatch"
 
         val backendBaseUrl = ((project.findProperty("BACKEND_BASE_URL") as String?) ?: "https://api.corebrew.ru").escapeForBuildConfig()
         buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
