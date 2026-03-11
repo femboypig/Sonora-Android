@@ -14,6 +14,7 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.net.Uri
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
@@ -602,7 +603,18 @@ class PlaybackController(
                     }
                     updateExternalState()
                 }
-                setDataSource(track.filePath)
+                val source = track.filePath.trim()
+                if (source.startsWith("http://", ignoreCase = true) ||
+                    source.startsWith("https://", ignoreCase = true)
+                ) {
+                    setDataSource(
+                        appContext,
+                        Uri.parse(source),
+                        mapOf("User-Agent" to REMOTE_STREAM_USER_AGENT)
+                    )
+                } else {
+                    setDataSource(source)
+                }
                 setOnCompletionListener {
                     if (playRequestToken == requestToken) {
                         handleTrackCompleted()
@@ -953,6 +965,7 @@ class PlaybackController(
         const val ACTION_STOP = "ru.hippo.Sonora.action.STOP"
 
         private const val NOTIFICATION_CHANNEL_ID = "sonora_playback"
+        private const val REMOTE_STREAM_USER_AGENT = "Sonora-iOS/1.0"
         internal const val NOTIFICATION_ID = 2047
     }
 }
