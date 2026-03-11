@@ -17,6 +17,13 @@ import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.PowerManager
 import android.os.SystemClock
+import androidx.media3.common.AudioAttributes as Media3AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -91,6 +98,7 @@ class PlaybackController(
     private val shuffleBag = ArrayDeque<Int>()
 
     private var mediaPlayer: MediaPlayer? = null
+    private var exoPlayer: ExoPlayer? = null
     private var queue: List<TrackItem> = emptyList()
     private var currentIndex: Int = -1
     private var sleepTimerJob: Job? = null
@@ -154,8 +162,12 @@ class PlaybackController(
     }
 
     fun currentPositionMs(): Long {
-        val player = mediaPlayer
-        val position = (player?.currentPosition ?: 0).toLong().coerceAtLeast(0L)
+        val mediaPlayerRef = mediaPlayer
+        val exoPlayerRef = exoPlayer
+        val position = when {
+            exoPlayerRef != null -> exoPlayerRef.currentPosition.coerceAtLeast(0L)
+            else -> (mediaPlayerRef?.currentPosition ?: 0).toLong().coerceAtLeast(0L)
+        }
         val pendingSeek = pendingSeekPositionMs
         if (pendingSeek < 0L) {
             return position
@@ -163,7 +175,7 @@ class PlaybackController(
         val elapsed = android.os.SystemClock.elapsedRealtime() - pendingSeekSetAtMs
         val reached = kotlin.math.abs(position - pendingSeek) <= 1500L
         val expired = elapsed >= pendingSeekHoldTimeoutMs
-        if (reached || expired || player == null) {
+        if (reached || expired || (mediaPlayerRef == null && exoPlayerRef == null)) {
             clearPendingSeekHold()
             return position
         }
@@ -171,7 +183,10 @@ class PlaybackController(
     }
 
     fun durationMs(): Long {
-        val playerDuration = mediaPlayer?.duration?.toLong() ?: 0L
+        val playerDuration = when {
+            exoPlayer != null -> exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L
+            else -> mediaPlayer?.duration?.toLong() ?: 0L
+        }
         if (playerDuration > 0L) {
             return playerDuration
         }
@@ -179,11 +194,16 @@ class PlaybackController(
     }
 
     fun seekTo(positionMs: Long) {
-        val player = mediaPlayer ?: run {
+        val mediaPlayerRef = mediaPlayer
+        val exoPlayerRef = exoPlayer
+        if (mediaPlayerRef == null && exoPlayerRef == null) {
             clearPendingSeekHold()
             return
         }
-        val playerDuration = player.duration.toLong().coerceAtLeast(0L)
+        val playerDuration = when {
+            exoPlayerRef != null -> exoPlayerRef.duration.coerceAtLeast(0L)
+            else -> mediaPlayerRef?.duration?.toLong()?.coerceAtLeast(0L) ?: 0L
+        }
         val fallbackDuration = currentTrack?.durationMs?.coerceAtLeast(0L) ?: 0L
         val knownDuration = maxOf(playerDuration, fallbackDuration)
         val clamped = if (knownDuration > 0L) {
@@ -197,7 +217,11 @@ class PlaybackController(
             updateExternalState()
             return
         }
-        player.seekTo(clamped.toInt())
+        if (exoPlayerRef != null) {
+            exoPlayerRef.seekTo(clamped)
+        } else {
+            mediaPlayerRef?.seekTo(clamped.toInt())
+        }
         updateExternalState()
     }
 
@@ -285,6 +309,16 @@ class PlaybackController(
             pendingPlayWhenPrepared = false
             pendingSeekPositionMs = clampedPosition
             pendingSeekSetAtMs = android.os.SystemClock.elapsedRealtime()
+            exoPlayer?.let { player ->
+                if (playerPrepared) {
+                    seekTo(clampedPosition)
+                }
+                if (playerPrepared && player.isPlaying) {
+                    player.pause()
+                }
+                isPlaying = false
+                updateExternalState()
+            }
             mediaPlayer?.let { player ->
                 runCatching { player.setVolume(0f, 0f) }
                 if (playerPrepared) {
@@ -308,18 +342,31 @@ class PlaybackController(
 
     fun togglePlayPause() {
         cancelPendingAutoNext()
-        val player = mediaPlayer ?: return
+        val exoPlayerRef = exoPlayer
+        val mediaPlayerRef = mediaPlayer
+        if (exoPlayerRef == null && mediaPlayerRef == null) {
+            return
+        }
         if (!playerPrepared) {
             pendingPlayWhenPrepared = !pendingPlayWhenPrepared
             isPlaying = pendingPlayWhenPrepared
+            exoPlayerRef?.playWhenReady = pendingPlayWhenPrepared
             updateExternalState()
             return
         }
         if (isPlaying) {
-            player.pause()
+            if (exoPlayerRef != null) {
+                exoPlayerRef.pause()
+            } else {
+                mediaPlayerRef?.pause()
+            }
             isPlaying = false
         } else {
-            player.start()
+            if (exoPlayerRef != null) {
+                exoPlayerRef.play()
+            } else {
+                mediaPlayerRef?.start()
+            }
             isPlaying = true
         }
         updateExternalState()
@@ -579,6 +626,100 @@ class PlaybackController(
         }
         updateExternalState()
 
+        val source = track.filePath.trim()
+        if (source.startsWith("http://", ignoreCase = true) ||
+            source.startsWith("https://", ignoreCase = true)
+        ) {
+            val remotePlayer = try {
+                ExoPlayer.Builder(appContext).build()
+            } catch (_: Exception) {
+                null
+            }
+
+            if (remotePlayer == null) {
+                currentIndex = -1
+                currentTrackId = null
+                isPreparing = false
+                isPlaying = false
+                updateExternalState()
+                return false
+            }
+
+            var readyHandled = false
+            val httpFactory = DefaultHttpDataSource.Factory()
+                .setUserAgent(REMOTE_STREAM_USER_AGENT)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(40_000)
+                .setReadTimeoutMs(600_000)
+            val mediaSource = ProgressiveMediaSource.Factory(httpFactory)
+                .createMediaSource(MediaItem.fromUri(Uri.parse(source)))
+
+            remotePlayer.setAudioAttributes(
+                Media3AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                true
+            )
+            remotePlayer.playWhenReady = pendingPlayWhenPrepared
+            remotePlayer.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playRequestToken != requestToken || exoPlayer !== remotePlayer) {
+                        runCatching { remotePlayer.release() }
+                        return
+                    }
+                    when (playbackState) {
+                        Player.STATE_READY -> {
+                            playerPrepared = true
+                            isPreparing = false
+                            if (!readyHandled) {
+                                readyHandled = true
+                                val pendingSeek = pendingSeekPositionMs
+                                if (pendingSeek >= 0L && remotePlayer.duration > 0L) {
+                                    remotePlayer.seekTo(pendingSeek.coerceIn(0L, remotePlayer.duration))
+                                }
+                                if (pendingPlayWhenPrepared) {
+                                    remotePlayer.playWhenReady = true
+                                    this@PlaybackController.isPlaying = true
+                                    onTrackPlayed(track.id)
+                                } else {
+                                    this@PlaybackController.isPlaying = false
+                                }
+                            }
+                            updateExternalState()
+                        }
+                        Player.STATE_ENDED -> {
+                            handleTrackCompleted()
+                        }
+                    }
+                }
+
+                override fun onIsPlayingChanged(isPlayingNow: Boolean) {
+                    if (playRequestToken == requestToken && exoPlayer === remotePlayer) {
+                        this@PlaybackController.isPlaying = isPlayingNow
+                        updateExternalState()
+                    }
+                }
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    if (playRequestToken == requestToken && exoPlayer === remotePlayer) {
+                        playerPrepared = false
+                        pendingPlayWhenPrepared = false
+                        isPreparing = false
+                        stopPlayer()
+                        currentIndex = -1
+                        currentTrackId = null
+                        this@PlaybackController.isPlaying = false
+                        updateExternalState()
+                    }
+                }
+            })
+            remotePlayer.setMediaSource(mediaSource)
+            remotePlayer.prepare()
+            exoPlayer = remotePlayer
+            return true
+        }
+
         val player = try {
             MediaPlayer().apply {
                 setAudioAttributes(
@@ -608,18 +749,7 @@ class PlaybackController(
                     }
                     updateExternalState()
                 }
-                val source = track.filePath.trim()
-                if (source.startsWith("http://", ignoreCase = true) ||
-                    source.startsWith("https://", ignoreCase = true)
-                ) {
-                    setDataSource(
-                        appContext,
-                        Uri.parse(source),
-                        mapOf("User-Agent" to REMOTE_STREAM_USER_AGENT)
-                    )
-                } else {
-                    setDataSource(source)
-                }
+                setDataSource(source)
                 setOnCompletionListener {
                     if (playRequestToken == requestToken) {
                         handleTrackCompleted()
@@ -666,6 +796,8 @@ class PlaybackController(
         playerPrepared = false
         pendingPlayWhenPrepared = false
         isPreparing = false
+        exoPlayer?.release()
+        exoPlayer = null
         mediaPlayer?.setOnPreparedListener(null)
         mediaPlayer?.setOnErrorListener(null)
         mediaPlayer?.setOnCompletionListener(null)
