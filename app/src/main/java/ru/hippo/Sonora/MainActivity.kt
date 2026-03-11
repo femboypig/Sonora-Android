@@ -8118,29 +8118,8 @@ private fun AndroidAppUpdateCard(
     onUpdate: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Spacer(modifier = Modifier.height(4.dp))
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(28.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f),
-                shape = RoundedCornerShape(28.dp)
-            )
-            .padding(16.dp)
-    ) {
-        Text(
-            text = "New build",
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.6.sp
-            ),
-            color = MaterialTheme.colorScheme.primary
-        )
-        Spacer(modifier = Modifier.height(12.dp))
+    Spacer(modifier = Modifier.height(2.dp))
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -8148,8 +8127,8 @@ private fun AndroidAppUpdateCard(
             StaticUpdateCover(
                 bitmap = coverBitmap,
                 modifier = Modifier
-                    .size(64.dp)
-                    .clip(RoundedCornerShape(18.dp))
+                    .size(58.dp)
+                    .clip(RoundedCornerShape(14.dp))
                     .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -8168,7 +8147,7 @@ private fun AndroidAppUpdateCard(
                     text = "Version ${release.versionName} (${release.versionCode})",
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
+                        fontWeight = FontWeight.Normal
                     ),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -8213,14 +8192,11 @@ private fun AndroidAppUpdateCard(
 
         if (updateState.downloading) {
             Spacer(modifier = Modifier.height(14.dp))
-            LinearProgressIndicator(
+            WaveDownloadProgressBar(
                 progress = updateState.downloadProgress.coerceIn(0f, 1f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(999.dp)),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    .height(18.dp)
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
@@ -8248,22 +8224,80 @@ private fun AndroidAppUpdateCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(999.dp))
-                .background(if (updateState.downloading) Color(0xFFD93025) else MaterialTheme.colorScheme.primary)
+                .background(if (updateState.downloading) Color(0xFFFF3B30) else Color(0xFF0A84FF))
                 .clickable(onClick = if (updateState.downloading) onCancel else onUpdate)
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = when {
                     updateState.downloading -> "Cancel"
                     updateState.downloadReady -> "Install update"
-                    else -> "Download update"
+                    else -> "Update"
                 },
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
                 color = Color.White
+            )
+        }
+    }
+}
+
+@Composable
+private fun WaveDownloadProgressBar(
+    progress: Float,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "update_wave_progress")
+    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+    val waveShift by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1700, easing = LinearEasing)
+        ),
+        label = "update_wave_progress_shift"
+    )
+    Canvas(modifier = modifier) {
+        val progressValue = progress.coerceIn(0f, 1f)
+        val centerY = size.height * 0.5f
+        val lineHeight = 2.dp.toPx()
+        val activeWidth = size.width * progressValue
+        val wavelength = 22.dp.toPx()
+        val amplitude = 2.2.dp.toPx()
+        val step = 2.dp.toPx().coerceAtLeast(1f)
+        val phaseOffset = waveShift * (Math.PI.toFloat() * 2f)
+
+        drawRoundRect(
+            color = trackColor,
+            topLeft = Offset(0f, centerY - (lineHeight * 0.5f)),
+            size = Size(size.width, lineHeight),
+            cornerRadius = CornerRadius(lineHeight * 0.5f, lineHeight * 0.5f)
+        )
+
+        if (activeWidth > 0f) {
+            val wavePath = Path()
+            var x = 0f
+            wavePath.moveTo(0f, centerY)
+            while (x <= activeWidth) {
+                val y = centerY + (sin(((x / wavelength) * (Math.PI.toFloat() * 2f) + phaseOffset).toDouble()).toFloat() * amplitude)
+                wavePath.lineTo(x, y)
+                x += step
+            }
+            drawPath(
+                path = wavePath,
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF3EA2FF),
+                        Color(0xFF0A84FF),
+                        Color(0xFF69B9FF)
+                    ),
+                    start = Offset(0f, centerY),
+                    end = Offset(activeWidth.coerceAtLeast(1f), centerY)
+                ),
+                style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round)
             )
         }
     }
