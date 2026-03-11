@@ -6330,7 +6330,7 @@ private fun MyWaveContoursBackground(
             withFrameNanos { frameNanos ->
                 if (lastFrameNanos != 0L) {
                     val deltaSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
-                    val speed = if (isPlaying) 0.17f else 0.05f
+                    val speed = if (isPlaying) 0.28f else 0.09f
                     contourClock += deltaSeconds * speed
                     val time = contourClock
                     val tau = (Math.PI * 2.0).toFloat()
@@ -6456,8 +6456,8 @@ private fun MyWaveContoursBackground(
             val ringPhase =
                 seedPhase +
                     (progress * 1.15f) +
-                    (t * (0.08f + (progress * 0.008f))) +
-                    (sin(((t * 0.13f) + (progress * 1.4f) + seedPhase).toDouble()).toFloat() * 0.42f)
+                    (t * (0.11f + (progress * 0.010f))) +
+                    (sin(((t * 0.17f) + (progress * 1.4f) + seedPhase).toDouble()).toFloat() * 0.52f)
             val ringCenterX =
                 center.x +
                     sin(((ringPhase * 0.72f) + (macroA * 0.14f)).toDouble()).toFloat() * size.width * 0.018f +
