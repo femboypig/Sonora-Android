@@ -2308,18 +2308,11 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
                 if (playbackQueue.any { it.id == targetPlaybackId }) {
                     playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
-                    scope.launch {
-                        delay(1000L)
-                        val currentMiniTrackId = miniStreamingTrackIdFromPlaybackId(playbackController.currentTrackId)
-                        if (currentMiniTrackId != null && currentMiniTrackId != track.trackId) {
-                            return@launch
-                        }
-                        launchMiniStreamingInstall(
-                            track = track,
-                            initialPayload = payload,
-                            showErrorMessage = false
-                        )
-                    }
+                    launchMiniStreamingInstall(
+                        track = track,
+                        initialPayload = payload,
+                        showErrorMessage = false
+                    )
                     prefetchMiniStreamingQueuePayloads(
                         queue = miniStreamingPlaybackQueue,
                         startIndexExclusive = normalizedStartIndex + 1

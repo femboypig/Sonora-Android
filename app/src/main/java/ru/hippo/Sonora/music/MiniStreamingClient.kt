@@ -274,8 +274,8 @@ class MiniStreamingClient(
                 val connection = (URL(normalizedUrl).openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     instanceFollowRedirects = true
-                    connectTimeout = 25_000
-                    readTimeout = 120_000
+                    connectTimeout = 40_000
+                    readTimeout = 600_000
                     setRequestProperty("User-Agent", BACKEND_USER_AGENT)
                 }
                 try {
