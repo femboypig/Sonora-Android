@@ -294,10 +294,22 @@ private enum class AppFontStyle(val storageValue: String, val label: String) {
     }
 }
 
+private enum class MyWaveLook(val storageValue: String, val label: String) {
+    Clouds("clouds", "Clouds"),
+    Contours("contours", "Contours");
+
+    companion object {
+        fun fromStorage(value: String?): MyWaveLook {
+            return values().firstOrNull { it.storageValue == value } ?: Contours
+        }
+    }
+}
+
 private data class SonoraAppSettings(
     val sliderStyle: PlayerSliderStyle = PlayerSliderStyle.Wave,
     val artworkStyle: ArtworkStyle = ArtworkStyle.Square,
     val fontStyle: AppFontStyle = AppFontStyle.System,
+    val myWaveLook: MyWaveLook = MyWaveLook.Contours,
     val accentHex: String = DEFAULT_ACCENT_HEX,
     val preservePlayerModes: Boolean = true,
     val trackGapSeconds: Float = 0f,
@@ -355,6 +367,7 @@ private class SonoraSettingsStore(context: Context) {
             sliderStyle = PlayerSliderStyle.fromStorage(prefs.getString(KEY_SLIDER_STYLE, PlayerSliderStyle.Wave.storageValue)),
             artworkStyle = ArtworkStyle.fromStorage(prefs.getString(KEY_ARTWORK_STYLE, ArtworkStyle.Square.storageValue)),
             fontStyle = AppFontStyle.fromStorage(prefs.getString(KEY_FONT_STYLE, AppFontStyle.System.storageValue)),
+            myWaveLook = MyWaveLook.fromStorage(prefs.getString(KEY_MY_WAVE_LOOK, MyWaveLook.Contours.storageValue)),
             accentHex = accentHex,
             preservePlayerModes = prefs.getBoolean(KEY_PRESERVE_PLAYER_MODES, true),
             trackGapSeconds = nearestTrackGapSecondsOption(prefs.getFloat(KEY_TRACK_GAP, 0f)),
@@ -369,6 +382,7 @@ private class SonoraSettingsStore(context: Context) {
             .putString(KEY_SLIDER_STYLE, settings.sliderStyle.storageValue)
             .putString(KEY_ARTWORK_STYLE, settings.artworkStyle.storageValue)
             .putString(KEY_FONT_STYLE, settings.fontStyle.storageValue)
+            .putString(KEY_MY_WAVE_LOOK, settings.myWaveLook.storageValue)
             .putString(KEY_ACCENT_HEX, normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX)
             .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
             .putFloat(KEY_TRACK_GAP, nearestTrackGapSecondsOption(settings.trackGapSeconds))
@@ -471,6 +485,7 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_SLIDER_STYLE = "player_slider_style"
         const val KEY_ARTWORK_STYLE = "artwork_style"
         const val KEY_FONT_STYLE = "font_style"
+        const val KEY_MY_WAVE_LOOK = "my_wave_look"
         const val KEY_ACCENT_HEX = "accent_hex"
         const val KEY_ACCENT_HUE = "accent_hue"
         const val KEY_ACCENT_COLOR_LEGACY = "accent_color"
@@ -700,6 +715,9 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     var renamePlaylistDraft by rememberSaveable { mutableStateOf("") }
     var coverTargetPlaylistID by rememberSaveable { mutableStateOf<String?>(null) }
     var homeVisitCount by rememberSaveable { mutableIntStateOf(1) }
+    var homeRecommendationsSessionSeed by rememberSaveable {
+        mutableIntStateOf((((System.currentTimeMillis() / 1000L) % 100_000L).toInt()).coerceAtLeast(1))
+    }
     var wasHomeSelected by rememberSaveable { mutableStateOf(true) }
     var lastPresentedHomeHeroTrackID by rememberSaveable { mutableStateOf<String?>(null) }
     var miniStreamingTracks by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
@@ -713,9 +731,6 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val miniStreamingInstallingJobs = remember { mutableMapOf<String, Job>() }
     val miniStreamingResolvingJobs = remember { mutableMapOf<String, Job>() }
     var miniStreamingPlaybackQueue by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
-    var homeRecommendationsSessionSeed by rememberSaveable {
-        mutableIntStateOf((((System.currentTimeMillis() / 1000L) % 100_000L).toInt()).coerceAtLeast(1))
-    }
     var miniStreamingActiveTrackId by rememberSaveable { mutableStateOf<String?>(null) }
     var miniStreamingResolvedPayloadByTrackId by remember {
         mutableStateOf<Map<String, MiniStreamingDownloadPayload>>(emptyMap())
@@ -3573,6 +3588,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                     listState = homeListState,
                     waveQueue = homeWaveTracks,
                     waveStartTrack = homeWaveDisplayTrack,
+                    waveLook = appSettings.myWaveLook,
                     tasteTracks = homeTasteTracks,
                     freshChoiceTracks = homeFreshChoiceTracks,
                     isWavePlaying = !playbackController.currentTrackId.isNullOrBlank() &&
@@ -5821,6 +5837,7 @@ private fun HomePage(
     listState: androidx.compose.foundation.lazy.LazyListState,
     waveQueue: List<TrackItem>,
     waveStartTrack: TrackItem?,
+    waveLook: MyWaveLook,
     tasteTracks: List<TrackItem>,
     freshChoiceTracks: List<TrackItem>,
     isWavePlaying: Boolean,
@@ -5845,6 +5862,7 @@ private fun HomePage(
             item(key = "home_wave") {
                 HomeMyWaveCard(
                     track = waveTrack,
+                    look = waveLook,
                     isPlaying = isWavePlaying,
                     onPlayToggle = onWaveToggleTap
                 )
@@ -5939,6 +5957,7 @@ private fun CollectionsSectionHeading(text: String) {
 @Composable
 private fun HomeMyWaveCard(
     track: TrackItem,
+    look: MyWaveLook,
     isPlaying: Boolean,
     onPlayToggle: () -> Unit
 ) {
@@ -6012,76 +6031,35 @@ private fun HomeMyWaveCard(
             .fillMaxWidth()
             .height(396.dp)
     ) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-            val pulseBoost = (0.90f + ((pulsar - 0.92f) * 0.80f))
-                .coerceIn(0.82f, 1.22f)
-            val pulseCenter = Offset(size.width * 0.5f, size.height * 0.48f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        blendColors(c0, c1, 0.5f).copy(alpha = 0.22f * pulseBoost),
-                        Color.Transparent
-                    ),
-                    center = pulseCenter,
-                    radius = size.minDimension * 0.64f
-                ),
-                center = pulseCenter,
-                radius = size.minDimension * 0.64f
+        when (look) {
+            MyWaveLook.Clouds -> MyWaveCloudsBackground(
+                colors = listOf(c0, c1, c2, c3),
+                phaseA = phaseA,
+                phaseB = phaseB,
+                breathe = breathe,
+                pulsar = pulsar,
+                modifier = Modifier.matchParentSize()
             )
-
-            val pulseRadius = size.minDimension * (0.16f + (0.08f * pulsar))
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        blendColors(c3, Color.White, 0.24f).copy(alpha = (0.16f * pulseBoost).coerceAtMost(0.30f)),
-                        Color.Transparent
-                    ),
-                    center = pulseCenter,
-                    radius = pulseRadius
-                ),
-                center = pulseCenter,
-                radius = pulseRadius
-            )
-
-            fun drawBlob(
-                color: Color,
-                baseX: Float,
-                baseY: Float,
-                ampX: Float,
-                ampY: Float,
-                phase: Float,
-                pulse: Float
+            MyWaveLook.Contours -> Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .padding(horizontal = 8.dp, vertical = 18.dp)
             ) {
-                val driftX = sin(((phaseA * 6.283f) + phase).toDouble()).toFloat()
-                val driftY = cos(((phaseB * 6.283f) + phase).toDouble()).toFloat()
-                val x = size.width * (baseX + (driftX * ampX))
-                val y = size.height * (baseY + (driftY * ampY))
-                val radius = size.minDimension * (0.18f + (pulse * 0.74f * breathe))
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            color.copy(alpha = (0.32f * pulseBoost).coerceAtMost(0.40f)),
-                            color.copy(alpha = (0.11f * pulseBoost).coerceAtMost(0.16f)),
-                            Color.Transparent
-                        ),
-                        center = Offset(x, y),
-                        radius = radius
-                    ),
-                    center = Offset(x, y),
-                    radius = radius
+                MyWaveContoursBackground(
+                    colors = listOf(c0, c1, c2, c3),
+                    phaseA = phaseA,
+                    phaseB = phaseB,
+                    breathe = breathe,
+                    pulsar = pulsar,
+                    isPlaying = isPlaying,
+                    modifier = Modifier.matchParentSize()
                 )
             }
-
-            drawBlob(c1, 0.37f, 0.43f, 0.04f, 0.03f, 0.5f, 0.05f)
-            drawBlob(c2, 0.63f, 0.42f, 0.04f, 0.03f, 1.2f, 0.05f)
-            drawBlob(c3, 0.50f, 0.56f, 0.05f, 0.04f, 2.0f, 0.06f)
-            drawBlob(c0, 0.34f, 0.58f, 0.04f, 0.03f, 2.7f, 0.05f)
-            drawBlob(c2, 0.66f, 0.57f, 0.04f, 0.03f, 3.3f, 0.05f)
-            drawBlob(c3, 0.48f, 0.32f, 0.04f, 0.03f, 3.9f, 0.05f)
-            drawBlob(c1, 0.52f, 0.70f, 0.04f, 0.03f, 4.6f, 0.04f)
         }
 
-        WaveGrainOverlay(seed = track.id.hashCode(), modifier = Modifier.matchParentSize())
+        if (look == MyWaveLook.Clouds) {
+            WaveGrainOverlay(seed = track.id.hashCode(), modifier = Modifier.matchParentSize())
+        }
 
         Column(
             modifier = Modifier
@@ -6122,6 +6100,364 @@ private fun HomeMyWaveCard(
                     color = Color.White
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun MyWaveCloudsBackground(
+    colors: List<Color>,
+    phaseA: Float,
+    phaseB: Float,
+    breathe: Float,
+    pulsar: Float,
+    modifier: Modifier = Modifier
+) {
+    val c0 = colors.getOrElse(0) { Color(0xFF4A3E35) }
+    val c1 = colors.getOrElse(1) { c0 }
+    val c2 = colors.getOrElse(2) { c1 }
+    val c3 = colors.getOrElse(3) { c2 }
+    Canvas(
+        modifier = modifier.padding(horizontal = 10.dp, vertical = 16.dp)
+    ) {
+        val pulseBoost = (0.90f + ((pulsar - 0.92f) * 0.80f))
+            .coerceIn(0.82f, 1.22f)
+        val pulseCenter = Offset(size.width * 0.5f, size.height * 0.48f)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    blendColors(c0, c1, 0.5f).copy(alpha = 0.22f * pulseBoost),
+                    Color.Transparent
+                ),
+                center = pulseCenter,
+                radius = size.minDimension * 0.64f
+            ),
+            center = pulseCenter,
+            radius = size.minDimension * 0.64f
+        )
+
+        val pulseRadius = size.minDimension * (0.16f + (0.08f * pulsar))
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    blendColors(c3, Color.White, 0.24f).copy(alpha = (0.16f * pulseBoost).coerceAtMost(0.30f)),
+                    Color.Transparent
+                ),
+                center = pulseCenter,
+                radius = pulseRadius
+            ),
+            center = pulseCenter,
+            radius = pulseRadius
+        )
+
+        fun drawBlob(
+            color: Color,
+            baseX: Float,
+            baseY: Float,
+            ampX: Float,
+            ampY: Float,
+            phase: Float,
+            pulse: Float
+        ) {
+            val driftX = sin(((phaseA * 6.283f) + phase).toDouble()).toFloat()
+            val driftY = cos(((phaseB * 6.283f) + phase).toDouble()).toFloat()
+            val x = size.width * (baseX + (driftX * ampX))
+            val y = size.height * (baseY + (driftY * ampY))
+            val radius = size.minDimension * (0.18f + (pulse * 0.74f * breathe))
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        color.copy(alpha = (0.32f * pulseBoost).coerceAtMost(0.40f)),
+                        color.copy(alpha = (0.11f * pulseBoost).coerceAtMost(0.16f)),
+                        Color.Transparent
+                    ),
+                    center = Offset(x, y),
+                    radius = radius
+                ),
+                center = Offset(x, y),
+                radius = radius
+            )
+        }
+
+        drawBlob(c1, 0.37f, 0.43f, 0.04f, 0.03f, 0.5f, 0.05f)
+        drawBlob(c2, 0.63f, 0.42f, 0.04f, 0.03f, 1.2f, 0.05f)
+        drawBlob(c3, 0.50f, 0.56f, 0.05f, 0.04f, 2.0f, 0.06f)
+        drawBlob(c0, 0.34f, 0.58f, 0.04f, 0.03f, 2.7f, 0.05f)
+        drawBlob(c2, 0.66f, 0.57f, 0.04f, 0.03f, 3.3f, 0.05f)
+        drawBlob(c3, 0.48f, 0.32f, 0.04f, 0.03f, 3.9f, 0.05f)
+        drawBlob(c1, 0.52f, 0.70f, 0.04f, 0.03f, 4.6f, 0.04f)
+    }
+}
+
+@Composable
+private fun MyWaveContoursBackground(
+    colors: List<Color>,
+    phaseA: Float,
+    phaseB: Float,
+    breathe: Float,
+    pulsar: Float,
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val c0 = colors.getOrElse(0) { Color(0xFF4A3E35) }
+    val c1 = colors.getOrElse(1) { c0 }
+    val c2 = colors.getOrElse(2) { c1 }
+    val c3 = colors.getOrElse(3) { c2 }
+    val lightTheme = !androidx.compose.foundation.isSystemInDarkTheme()
+    val colorSeed = (
+        (c0.red * 0.31f) +
+            (c1.green * 0.27f) +
+            (c2.blue * 0.23f) +
+            (c3.red * 0.19f)
+        ).coerceIn(0f, 1f)
+    val ringCount = 7
+    var contourClock by remember { mutableFloatStateOf(0f) }
+    val ringDriftX = remember { FloatArray(ringCount) }
+    val ringDriftY = remember { FloatArray(ringCount) }
+    val ringRadiusWarpX = remember { FloatArray(ringCount) }
+    val ringRadiusWarpY = remember { FloatArray(ringCount) }
+    val ringWobble = remember { FloatArray(ringCount) }
+    val ringDriftXVelocity = remember { FloatArray(ringCount) }
+    val ringDriftYVelocity = remember { FloatArray(ringCount) }
+    val ringRadiusWarpXVelocity = remember { FloatArray(ringCount) }
+    val ringRadiusWarpYVelocity = remember { FloatArray(ringCount) }
+    val ringWobbleVelocity = remember { FloatArray(ringCount) }
+
+    LaunchedEffect(isPlaying, colorSeed) {
+        var lastFrameNanos = 0L
+        fun stepSpring(
+            values: FloatArray,
+            velocities: FloatArray,
+            index: Int,
+            target: Float,
+            stiffness: Float,
+            deltaSeconds: Float
+        ) {
+            val damping = kotlin.math.exp((if (isPlaying) -5.8f else -8.2f) * deltaSeconds).toFloat()
+            val acceleration = (target - values[index]) * stiffness
+            velocities[index] = (velocities[index] + (acceleration * deltaSeconds)) * damping
+            values[index] += velocities[index] * deltaSeconds
+        }
+
+        while (true) {
+            withFrameNanos { frameNanos ->
+                if (lastFrameNanos != 0L) {
+                    val deltaSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
+                    val speed = if (isPlaying) 0.26f else 0.08f
+                    contourClock += deltaSeconds * speed
+                    val time = contourClock
+                    val tau = (Math.PI * 2.0).toFloat()
+                    val seedPhase = (colorSeed * tau) + (phaseA * tau * 0.003f) + (phaseB * tau * 0.002f)
+                    val sharedCompression =
+                        (sin(((time * 0.16f) + seedPhase).toDouble()).toFloat() * 0.34f) +
+                            (cos(((time * 0.11f) - (seedPhase * 0.37f)).toDouble()).toFloat() * 0.18f) +
+                            (sin(((time * 0.07f) + (seedPhase * 0.79f)).toDouble()).toFloat() * 0.10f)
+                    val sharedLift =
+                        (cos(((time * 0.13f) + (seedPhase * 0.21f)).toDouble()).toFloat() * 0.28f) +
+                            (sin(((time * 0.09f) - (seedPhase * 0.48f)).toDouble()).toFloat() * 0.16f)
+                    val targetPressure = FloatArray(ringCount)
+
+                    for (index in 0 until ringCount) {
+                        val progress = index / (ringCount - 1f)
+                        val ringSeed = seedPhase + (index * 0.73f) + (progress * 0.91f)
+                        val ringA = sin(((time * (0.21f + (progress * 0.018f))) + ringSeed).toDouble()).toFloat()
+                        val ringB = cos(((time * (0.16f + (progress * 0.013f))) - (ringSeed * 0.63f)).toDouble()).toFloat()
+                        val ringC = sin(((time * (0.12f + (progress * 0.010f))) + (ringSeed * 0.47f)).toDouble()).toFloat()
+                        targetPressure[index] =
+                            (sharedCompression * 0.46f) +
+                                (sharedLift * 0.12f) +
+                                (ringA * 0.12f) +
+                                (ringB * 0.08f) +
+                                (ringC * 0.04f)
+                    }
+
+                    for (index in 0 until ringCount) {
+                        val progress = index / (ringCount - 1f)
+                        val ringSeed = seedPhase + (index * 0.73f) + (progress * 0.91f)
+                        val envelope = (1.0f - kotlin.math.abs(progress - 0.5f) * 1.10f).coerceAtLeast(0.36f)
+                        val prev = targetPressure.getOrElse(index - 1) { targetPressure[index] }
+                        val next = targetPressure.getOrElse(index + 1) { targetPressure[index] }
+                        val neighborPressure = (((prev + next) * 0.5f) - targetPressure[index]) * 1.34f
+                        val ringA = sin(((time * (0.21f + (progress * 0.018f))) + ringSeed).toDouble()).toFloat()
+                        val ringB = cos(((time * (0.16f + (progress * 0.013f))) - (ringSeed * 0.63f)).toDouble()).toFloat()
+                        val ringC = sin(((time * (0.12f + (progress * 0.010f))) + (ringSeed * 0.47f)).toDouble()).toFloat()
+                        val motion = if (isPlaying) 1.0f else 0.62f
+                        val targetDriftX =
+                            ((sharedLift * 0.08f) + (ringA * 0.06f) - (ringB * 0.03f) + (neighborPressure * 0.06f)) *
+                                envelope *
+                                motion
+                        val targetDriftY =
+                            ((targetPressure[index] * 0.42f) + (neighborPressure * 0.52f) + (ringB * 0.06f)) *
+                                envelope *
+                                motion
+                        val targetRadiusWarpX =
+                            ((targetPressure[index] * 0.18f) + (neighborPressure * 0.28f) + (ringA * 0.04f)) *
+                                envelope *
+                                motion
+                        val targetRadiusWarpY =
+                            ((-targetPressure[index] * 0.16f) - (neighborPressure * 0.24f) + (ringC * 0.05f)) *
+                                envelope *
+                                motion
+                        val targetWobble =
+                            ((sharedCompression * 0.10f) + (ringA * 0.18f) + (ringB * 0.08f) + (ringC * 0.04f)) *
+                                envelope *
+                                motion
+                        stepSpring(ringDriftX, ringDriftXVelocity, index, targetDriftX, 9.4f, deltaSeconds)
+                        stepSpring(ringDriftY, ringDriftYVelocity, index, targetDriftY, 10.6f, deltaSeconds)
+                        stepSpring(ringRadiusWarpX, ringRadiusWarpXVelocity, index, targetRadiusWarpX, 8.8f, deltaSeconds)
+                        stepSpring(ringRadiusWarpY, ringRadiusWarpYVelocity, index, targetRadiusWarpY, 8.6f, deltaSeconds)
+                        stepSpring(ringWobble, ringWobbleVelocity, index, targetWobble, 9.2f, deltaSeconds)
+                    }
+                }
+                lastFrameNanos = frameNanos
+            }
+        }
+    }
+
+    Canvas(modifier = modifier) {
+        val tau = (Math.PI * 2.0).toFloat()
+        val motion = if (isPlaying) 1.0f else 0.72f
+        val seedPhase = (colorSeed * tau) + (phaseA * tau * 0.003f) + (phaseB * tau * 0.002f)
+        val t = contourClock
+        val driverA = sin(((t * 0.18f) + seedPhase).toDouble()).toFloat()
+        val driverB = cos(((t * 0.11f) - (seedPhase * 0.37f)).toDouble()).toFloat()
+        val driverC = sin(((t * 0.07f) + (seedPhase * 0.79f)).toDouble()).toFloat()
+        val driverD = cos(((t * 0.15f) + (seedPhase * 0.21f)).toDouble()).toFloat()
+        val macroA = (driverA * 0.54f) + (driverC * 0.26f) + (driverD * 0.20f)
+        val macroB = (driverB * 0.50f) + (driverC * 0.20f) + (driverD * 0.30f)
+        val macroC = (driverA * driverB * 0.26f) + (driverC * 0.40f) + (driverD * 0.34f)
+        val audioLift = ((((phaseA - phaseB) * 0.5f) + 0.5f).coerceIn(0f, 1f) - 0.5f) * 0.08f
+        val center = Offset(
+            x = (size.width * 0.5f) + ((macroA * 0.62f) + (macroC * 0.24f)) * size.width * 0.004f * motion,
+            y = (size.height * 0.53f) + (((macroB * 0.58f) + (macroC * 0.24f)) + audioLift) * size.height * 0.006f * motion
+        )
+        val haloRadius = size.minDimension * (0.35f + ((pulsar - 0.92f) * 0.11f))
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    blendColors(if (lightTheme) blendColors(c0, Color.White, 0.14f) else c0, c1, 0.52f)
+                        .copy(alpha = if (isPlaying) 0.28f else 0.18f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = haloRadius
+            ),
+            center = center,
+            radius = haloRadius
+        )
+
+        val coreRadius = size.minDimension * (0.24f + ((breathe - 0.95f) * 0.06f))
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    blendColors(if (lightTheme) blendColors(c1, Color.White, 0.18f) else c1, c2, 0.48f)
+                        .copy(alpha = if (isPlaying) 0.20f else 0.12f),
+                    blendColors(if (lightTheme) blendColors(c2, Color.White, 0.16f) else c2, c3, 0.42f)
+                        .copy(alpha = if (isPlaying) 0.08f else 0.04f),
+                    Color.Transparent
+                ),
+                center = center,
+                radius = coreRadius
+            ),
+            center = center,
+            radius = coreRadius
+        )
+
+        val palette = listOf(c0, c1, c2, c3)
+        repeat(ringCount) { index ->
+            val progress = index / (ringCount - 1f)
+            val ringPhase = seedPhase + (progress * 1.15f) + (t * (0.14f + (progress * 0.012f)))
+            val ringCenterX =
+                center.x +
+                    sin(((ringPhase * 0.72f) + (macroA * 0.14f)).toDouble()).toFloat() * size.width * 0.018f +
+                    (ringDriftX[index] * size.width * 0.018f)
+            val ringCenterY =
+                center.y +
+                    cos(((ringPhase * 0.54f) + 0.6f + (macroB * 0.12f)).toDouble()).toFloat() * size.height * 0.022f +
+                    (ringDriftY[index] * size.height * 0.026f)
+            val radiusX =
+                size.width * (0.17f + (progress * 0.23f)) +
+                    (ringRadiusWarpX[index] * size.width * (0.020f + (progress * 0.006f)))
+            val radiusY =
+                size.height * (0.13f + (progress * 0.17f)) +
+                    (ringRadiusWarpY[index] * size.height * (0.018f + (progress * 0.005f)))
+            val amplitude =
+                size.minDimension * (0.014f + (progress * 0.010f)) *
+                    (if (isPlaying) 1.0f else 0.82f)
+            val pointCount = 56
+
+            val contour = Path().apply {
+                for (point in 0..pointCount) {
+                    val angle = (point / pointCount.toFloat()) * tau
+                    val wobbleA =
+                        sin((((angle * 2f) + ringPhase) + (ringWobble[index] * 0.42f) + (macroA * 0.14f)).toDouble())
+                            .toFloat() * amplitude
+                    val wobbleB =
+                        cos((((angle * 3f) - (ringPhase * 0.74f)) + (ringWobble[index] * 0.20f) + (macroB * 0.10f)).toDouble())
+                            .toFloat() * amplitude * 0.54f
+                    val wobbleC =
+                        sin((((angle * 5f) + (ringPhase * 1.12f)) + (macroC * 0.08f)).toDouble())
+                            .toFloat() * amplitude * 0.20f
+                    val orbitX = cos(angle.toDouble()).toFloat() * (radiusX + wobbleA + wobbleB)
+                    val orbitY = sin(angle.toDouble()).toFloat() * (radiusY + (wobbleA * 0.72f) - (wobbleB * 0.16f) + wobbleC)
+                    val x = ringCenterX + orbitX
+                    val y = ringCenterY + orbitY
+                    if (point == 0) {
+                        moveTo(x, y)
+                    } else {
+                        lineTo(x, y)
+                    }
+                }
+                close()
+            }
+
+            val linePalette = listOf(
+                if (lightTheme) blendColors(c3, Color.White, 0.14f) else blendColors(c3, Color.White, 0.06f),
+                if (lightTheme) blendColors(c1, Color.White, 0.20f) else blendColors(c1, Color.White, 0.08f),
+                if (lightTheme) blendColors(c2, Color.White, 0.16f) else blendColors(c2, Color.White, 0.06f),
+                if (lightTheme) blendColors(c0, Color.White, 0.10f) else blendColors(c0, Color.White, 0.02f)
+            )
+            val base = linePalette[index % linePalette.size]
+            val alpha = if (lightTheme) {
+                if (index < 3) 0.88f else 0.68f
+            } else {
+                if (index < 3) 1.0f else 0.82f
+            }
+            val lineColor = base.copy(alpha = alpha)
+            val lineBrush = Brush.linearGradient(
+                colors = listOf(
+                    lineColor,
+                    blendColors(lineColor, Color.White, if (lightTheme) 0.14f else 0.08f),
+                    lineColor
+                ),
+                start = Offset(ringCenterX - radiusX, ringCenterY - radiusY),
+                end = Offset(ringCenterX + radiusX, ringCenterY + radiusY)
+            )
+
+            drawPath(
+                path = contour,
+                color = lineColor.copy(
+                    alpha = if (lightTheme) {
+                        if (index < 3) 0.16f else 0.08f
+                    } else {
+                        if (index < 3) 0.26f else 0.14f
+                    }
+                ),
+                style = Stroke(
+                    width = size.minDimension * (0.0125f - (progress * 0.0008f)),
+                    cap = StrokeCap.Round,
+                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                )
+            )
+            drawPath(
+                path = contour,
+                brush = lineBrush,
+                style = Stroke(
+                    width = size.minDimension * (0.0072f - (progress * 0.00055f)),
+                    cap = StrokeCap.Round,
+                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                )
+            )
         }
     }
 }
@@ -6730,6 +7066,17 @@ private fun SettingsPage(
                     onSelect = { index ->
                         val selected = AppFontStyle.values().getOrElse(index) { AppFontStyle.System }
                         onSettingsChange(settings.copy(fontStyle = selected))
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsChoiceRow(
+                    title = "My Wave look",
+                    subtitle = "Contours or previous cloud animation",
+                    options = MyWaveLook.values().map { it.label },
+                    selectedIndex = MyWaveLook.values().indexOf(settings.myWaveLook),
+                    onSelect = { index ->
+                        val selected = MyWaveLook.values().getOrElse(index) { MyWaveLook.Contours }
+                        onSettingsChange(settings.copy(myWaveLook = selected))
                     }
                 )
             }
