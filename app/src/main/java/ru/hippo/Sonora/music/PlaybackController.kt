@@ -23,7 +23,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -630,8 +630,15 @@ class PlaybackController(
         if (source.startsWith("http://", ignoreCase = true) ||
             source.startsWith("https://", ignoreCase = true)
         ) {
+            val httpFactory = DefaultHttpDataSource.Factory()
+                .setUserAgent(REMOTE_STREAM_USER_AGENT)
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(40_000)
+                .setReadTimeoutMs(600_000)
             val remotePlayer = try {
-                ExoPlayer.Builder(appContext).build()
+                ExoPlayer.Builder(appContext)
+                    .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+                    .build()
             } catch (_: Exception) {
                 null
             }
@@ -646,14 +653,6 @@ class PlaybackController(
             }
 
             var readyHandled = false
-            val httpFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(REMOTE_STREAM_USER_AGENT)
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(40_000)
-                .setReadTimeoutMs(600_000)
-            val mediaSource = ProgressiveMediaSource.Factory(httpFactory)
-                .createMediaSource(MediaItem.fromUri(Uri.parse(source)))
-
             remotePlayer.setAudioAttributes(
                 Media3AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -714,7 +713,7 @@ class PlaybackController(
                     }
                 }
             })
-            remotePlayer.setMediaSource(mediaSource)
+            remotePlayer.setMediaItem(MediaItem.fromUri(Uri.parse(source)))
             remotePlayer.prepare()
             exoPlayer = remotePlayer
             return true
