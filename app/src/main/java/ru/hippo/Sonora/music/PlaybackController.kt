@@ -56,6 +56,9 @@ class PlaybackController(
     var isPlaying: Boolean by mutableStateOf(false)
         private set
 
+    var isPreparing: Boolean by mutableStateOf(false)
+        private set
+
     var queueCount: Int by mutableIntStateOf(0)
         private set
 
@@ -569,6 +572,7 @@ class PlaybackController(
         currentTrackId = track.id
         playerPrepared = false
         pendingPlayWhenPrepared = true
+        isPreparing = true
         isPlaying = false
         if (isShuffleEnabled && queue.size > 1) {
             refillShuffleBag(excluding = currentIndex)
@@ -590,6 +594,7 @@ class PlaybackController(
                         return@setOnPreparedListener
                     }
                     playerPrepared = true
+                    isPreparing = false
                     val pendingSeek = pendingSeekPositionMs
                     if (pendingSeek >= 0L && preparedPlayer.duration > 0) {
                         preparedPlayer.seekTo(pendingSeek.coerceIn(0L, preparedPlayer.duration.toLong()).toInt())
@@ -624,6 +629,7 @@ class PlaybackController(
                     if (playRequestToken == requestToken && mediaPlayer === failedPlayer) {
                         playerPrepared = false
                         pendingPlayWhenPrepared = false
+                        isPreparing = false
                         stopPlayer()
                         currentIndex = -1
                         currentTrackId = null
@@ -644,6 +650,7 @@ class PlaybackController(
         if (player == null) {
             currentIndex = -1
             currentTrackId = null
+            isPreparing = false
             isPlaying = false
             updateExternalState()
             return false
@@ -658,6 +665,7 @@ class PlaybackController(
         clearPendingSeekHold()
         playerPrepared = false
         pendingPlayWhenPrepared = false
+        isPreparing = false
         mediaPlayer?.setOnPreparedListener(null)
         mediaPlayer?.setOnErrorListener(null)
         mediaPlayer?.setOnCompletionListener(null)

@@ -1128,11 +1128,11 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         }
     }
 
-    LaunchedEffect(playbackController.currentTrackId, miniStreamingPendingTrack?.id) {
+    LaunchedEffect(playbackController.currentTrackId, miniStreamingPendingTrack?.id, playbackController.isPreparing) {
         val currentPlaybackId = playbackController.currentTrackId
         if (currentPlaybackId != null) {
             val pending = miniStreamingPendingTrack
-            if (pending != null && pending.id == currentPlaybackId) {
+            if (pending != null && pending.id == currentPlaybackId && !playbackController.isPreparing) {
                 miniStreamingPendingTrack = null
             }
             val miniStreamingTrackId = if (currentPlaybackId.startsWith(MINI_STREAMING_PLAYBACK_PREFIX)) {
@@ -2230,6 +2230,13 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             val installed = installMiniStreamingTrackToLibrary(track, payload)
             if (installed == null && showErrorMessage) {
                 snackbarHostState.showSnackbar("Install failed for ${track.title}")
+            } else if (installed != null && miniStreamingActiveTrackId == track.trackId && playbackController.currentTrackId == null) {
+                val targetPlaybackId = miniStreamingPlaybackIdForTrack(track.trackId)
+                val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
+                if (playbackQueue.any { it.id == targetPlaybackId }) {
+                    playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
+                    playerVisible = true
+                }
             }
         }
         miniStreamingInstallingJobs[track.trackId] = installJob
@@ -2287,7 +2294,6 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
                 if (playbackQueue.any { it.id == targetPlaybackId }) {
                     playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
-                    miniStreamingPendingTrack = null
                     prefetchMiniStreamingQueuePayloads(
                         queue = miniStreamingPlaybackQueue,
                         startIndexExclusive = normalizedStartIndex + 1
@@ -2302,7 +2308,6 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
                 if (playbackQueue.any { it.id == targetPlaybackId }) {
                     playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
-                    miniStreamingPendingTrack = null
                     scope.launch {
                         delay(1000L)
                         val currentMiniTrackId = miniStreamingTrackIdFromPlaybackId(playbackController.currentTrackId)
