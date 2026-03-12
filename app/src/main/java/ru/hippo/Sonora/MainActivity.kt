@@ -101,7 +101,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
@@ -6171,22 +6170,13 @@ private fun HomeMyWaveCard(
             .fillMaxWidth()
             .height(396.dp)
     ) {
-        Crossfade(
-            targetState = track,
-            animationSpec = tween(
-                durationMillis = 900,
-                easing = androidx.compose.animation.core.FastOutSlowInEasing
-            ),
-            label = "my_wave_track_transition"
-        ) { displayedTrack ->
-            HomeMyWaveVisualBackground(
-                track = displayedTrack,
-                look = look,
-                isPlaying = isPlaying,
-                visualClockSeconds = visualClockSeconds,
-                modifier = Modifier.matchParentSize()
-            )
-        }
+        HomeMyWaveVisualBackground(
+            track = track,
+            look = look,
+            isPlaying = isPlaying,
+            visualClockSeconds = visualClockSeconds,
+            modifier = Modifier.matchParentSize()
+        )
 
         Column(
             modifier = Modifier
@@ -6302,9 +6292,17 @@ private fun HomeMyWaveVisualBackground(
                     .matchParentSize()
                     .padding(horizontal = 8.dp, vertical = 18.dp)
             ) {
+                val animatedTrackSeed by animateFloatAsState(
+                    targetValue = waveTrackSeed(track.id),
+                    animationSpec = tween(
+                        durationMillis = if (isPlaying) 1650 else 1850,
+                        easing = androidx.compose.animation.core.FastOutSlowInEasing
+                    ),
+                    label = "wave_track_seed"
+                )
                 MyWaveContoursBackground(
                     colors = listOf(c0, c1, c2, c3),
-                    trackSeed = waveTrackSeed(track.id),
+                    trackSeed = animatedTrackSeed,
                     isPlaying = isPlaying,
                     visualClockSeconds = visualClockSeconds,
                     modifier = Modifier.matchParentSize()
