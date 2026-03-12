@@ -1420,8 +1420,30 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         playbackHistoryStore.recentTrackIds(limit = 120).mapNotNull { trackByID[it] }
     }
 
-    val homeWaveTracks = remember(tracks, analyticsByID, favoriteTrackIDs) {
-        buildHomeForYouTracks(tracks, analyticsByID, favoriteTrackIDs, limit = 120)
+    val rankedHomeWaveTrackIds = remember(tracks, analyticsByID, favoriteTrackIDs) {
+        buildHomeForYouTracks(tracks, analyticsByID, favoriteTrackIDs, limit = 120).map { it.id }
+    }
+    var homeWaveTrackIds by rememberSaveable { mutableStateOf(rankedHomeWaveTrackIds) }
+    LaunchedEffect(rankedHomeWaveTrackIds, playbackController.currentTrackId) {
+        val liveTrackID = playbackController.currentTrackId
+        val keepStableWaveQueue = !liveTrackID.isNullOrBlank() && homeWaveTrackIds.contains(liveTrackID)
+        if (!keepStableWaveQueue || homeWaveTrackIds.isEmpty()) {
+            homeWaveTrackIds = rankedHomeWaveTrackIds
+            return@LaunchedEffect
+        }
+
+        val sanitizedIds = homeWaveTrackIds.filter { trackByID.containsKey(it) }
+        if (sanitizedIds != homeWaveTrackIds) {
+            homeWaveTrackIds = sanitizedIds.ifEmpty { rankedHomeWaveTrackIds }
+        }
+    }
+    val homeWaveTracks = remember(trackByID, homeWaveTrackIds, rankedHomeWaveTrackIds) {
+        val resolved = homeWaveTrackIds.mapNotNull { trackByID[it] }
+        if (resolved.isNotEmpty()) {
+            resolved
+        } else {
+            rankedHomeWaveTrackIds.mapNotNull { trackByID[it] }
+        }
     }
     val homeNeedThisTracks = remember(tracks, analyticsByID, favoriteTrackIDs, homeRecommendationsSessionSeed) {
         buildHomeNeedThisTracks(
@@ -1455,14 +1477,14 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         if (!liveTrackID.isNullOrBlank() && homeWaveTracks.any { it.id == liveTrackID }) {
             homeWaveDisplayTrackID = liveTrackID
         } else if (homeWaveDisplayTrackID.isNullOrBlank() ||
-            homeWaveTracks.none { it.id == homeWaveDisplayTrackID }
+            trackByID[homeWaveDisplayTrackID] == null
         ) {
             homeWaveDisplayTrackID = homeWaveStartTrack?.id ?: homeWaveTracks.first().id
         }
     }
-    val homeWaveDisplayTrack = remember(homeWaveTracks, homeWaveDisplayTrackID, homeWaveStartTrack?.id) {
+    val homeWaveDisplayTrack = remember(trackByID, homeWaveDisplayTrackID, homeWaveStartTrack?.id) {
         val stableID = homeWaveDisplayTrackID
-        homeWaveTracks.firstOrNull { it.id == stableID } ?: homeWaveStartTrack
+        stableID?.let { trackByID[it] } ?: homeWaveStartTrack
     }
     val homeTasteTracks = remember(homeNeedThisTracks, homeWaveDisplayTrack) {
         val waveTrack = homeWaveDisplayTrack ?: return@remember homeNeedThisTracks
