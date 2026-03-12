@@ -10621,7 +10621,7 @@ private fun PlayerView(
                             fontFamily = SonoraAndroidSansFamily,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
-                            letterSpacing = (-0.1).sp
+                            letterSpacing = 0.sp
                         ),
                         color = secondaryColor
                     )
@@ -10631,7 +10631,7 @@ private fun PlayerView(
                             fontFamily = SonoraAndroidSansFamily,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
-                            letterSpacing = (-0.1).sp
+                            letterSpacing = 0.sp
                         ),
                         color = secondaryColor
                     )

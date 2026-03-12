@@ -33,7 +33,7 @@ val Typography = Typography(
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 20.sp,
-        letterSpacing = (-0.1).sp,
+        letterSpacing = 0.sp,
         platformStyle = PlatformTextStyle(includeFontPadding = false)
     ),
     bodyMedium = TextStyle(
@@ -41,7 +41,7 @@ val Typography = Typography(
         fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
         lineHeight = 18.sp,
-        letterSpacing = (-0.1).sp,
+        letterSpacing = 0.sp,
         platformStyle = PlatformTextStyle(includeFontPadding = false)
     )
 )
