@@ -658,10 +658,7 @@ private val SonoraAndroidYSMusicFontFamily = FontFamily(
     Font(R.font.ysmusic_headline_bold, FontWeight.Bold)
 )
 
-private val SonoraAndroidSFProSemiboldFamily = FontFamily(
-    Font(R.font.sf_pro_text_semibold, FontWeight.SemiBold),
-    Font(R.font.sf_pro_text_bold, FontWeight.Bold)
-)
+private val SonoraAndroidSansFamily = FontFamily.SansSerif
 
 private val SonoraAndroidNotoSerifFamily = FontFamily(
     Font(R.font.noto_serif_regular, FontWeight.Normal),
@@ -4943,7 +4940,7 @@ private fun PlaylistCreateNamePage(
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.End,
                     style = TextStyle(
-                        fontFamily = SonoraAndroidSFProSemiboldFamily,
+                        fontFamily = SonoraAndroidSansFamily,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     ),
@@ -5146,7 +5143,7 @@ private fun SelectableTrackRow(
             text = formatDuration(track.durationMs),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = TextStyle(
-                fontFamily = SonoraAndroidSFProSemiboldFamily,
+                fontFamily = SonoraAndroidSansFamily,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold
             ),
@@ -5736,7 +5733,7 @@ private fun LocalSearchTrackRow(
             text = formatDuration(track.durationMs),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = TextStyle(
-                fontFamily = SonoraAndroidSFProSemiboldFamily,
+                fontFamily = SonoraAndroidSansFamily,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold
             ),
@@ -5828,7 +5825,7 @@ private fun MiniStreamingTrackRow(
                 text = trailingLabel,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = TextStyle(
-                    fontFamily = SonoraAndroidSFProSemiboldFamily,
+                    fontFamily = SonoraAndroidSansFamily,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
@@ -9160,7 +9157,7 @@ private fun CollectionsNewPlaylistCard(
         Text(
             text = "New playlist",
             style = TextStyle(
-                fontFamily = SonoraAndroidSFProSemiboldFamily,
+                fontFamily = SonoraAndroidSansFamily,
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp
             ),
@@ -9782,7 +9779,7 @@ private fun TrackRow(
                 text = formatDuration(track.durationMs),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = TextStyle(
-                    fontFamily = SonoraAndroidSFProSemiboldFamily,
+                    fontFamily = SonoraAndroidSansFamily,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 ),
@@ -10604,7 +10601,7 @@ private fun PlayerView(
                     Text(
                         text = formatDuration(elapsedMs),
                         style = TextStyle(
-                            fontFamily = SonoraAndroidSFProSemiboldFamily,
+                            fontFamily = SonoraAndroidSansFamily,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             letterSpacing = (-0.1).sp
@@ -10614,7 +10611,7 @@ private fun PlayerView(
                     Text(
                         text = formatDuration(durationMs),
                         style = TextStyle(
-                            fontFamily = SonoraAndroidSFProSemiboldFamily,
+                            fontFamily = SonoraAndroidSansFamily,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             letterSpacing = (-0.1).sp

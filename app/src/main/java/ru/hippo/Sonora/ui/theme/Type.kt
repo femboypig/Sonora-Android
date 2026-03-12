@@ -13,12 +13,7 @@ private val SonoraHeadlineFontFamily = FontFamily(
     Font(R.font.ysmusic_headline_bold, FontWeight.Bold)
 )
 
-private val SonoraSFProTextFontFamily = FontFamily(
-    Font(R.font.sf_pro_text_regular, FontWeight.Normal),
-    Font(R.font.sf_pro_text_medium, FontWeight.Medium),
-    Font(R.font.sf_pro_text_semibold, FontWeight.SemiBold),
-    Font(R.font.sf_pro_text_bold, FontWeight.Bold)
-)
+private val SonoraSansTextFontFamily = FontFamily.SansSerif
 
 val Typography = Typography(
     headlineMedium = TextStyle(
@@ -34,7 +29,7 @@ val Typography = Typography(
         lineHeight = 32.sp
     ),
     bodyLarge = TextStyle(
-        fontFamily = SonoraSFProTextFontFamily,
+        fontFamily = SonoraSansTextFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 20.sp,
@@ -42,7 +37,7 @@ val Typography = Typography(
         platformStyle = PlatformTextStyle(includeFontPadding = false)
     ),
     bodyMedium = TextStyle(
-        fontFamily = SonoraSFProTextFontFamily,
+        fontFamily = SonoraSansTextFontFamily,
         fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
         lineHeight = 18.sp,
