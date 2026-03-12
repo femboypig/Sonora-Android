@@ -430,13 +430,13 @@ class PlaybackController(
 
     fun playNextFromUser(): Boolean {
         cancelPendingAutoNext()
-        pendingSkipRollback = captureSkipRollbackState()
+        captureSkipRollbackState()?.let { pendingSkipRollback = it }
         val skippedTrackId = currentTrackId
         val advanced = playNextInternal(automatic = false)
         if (!advanced) {
             pendingSkipRollback = null
         }
-        if (!skippedTrackId.isNullOrBlank()) {
+        if (advanced && !skippedTrackId.isNullOrBlank()) {
             onTrackSkipped(skippedTrackId)
         }
         return advanced
@@ -444,13 +444,13 @@ class PlaybackController(
 
     fun playPreviousFromUser(): Boolean {
         cancelPendingAutoNext()
-        pendingSkipRollback = captureSkipRollbackState()
+        captureSkipRollbackState()?.let { pendingSkipRollback = it }
         val skippedTrackId = currentTrackId
         val rewound = playPreviousInternal()
         if (!rewound) {
             pendingSkipRollback = null
         }
-        if (!skippedTrackId.isNullOrBlank()) {
+        if (rewound && !skippedTrackId.isNullOrBlank()) {
             onTrackSkipped(skippedTrackId)
         }
         return rewound
@@ -906,6 +906,9 @@ class PlaybackController(
     }
 
     private fun captureSkipRollbackState(): SkipRollbackState? {
+        if (isPreparing || !playerPrepared) {
+            return null
+        }
         val trackId = currentTrackId ?: return null
         if (currentIndex !in queue.indices) {
             return null
