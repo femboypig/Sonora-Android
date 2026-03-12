@@ -6445,7 +6445,7 @@ private fun MyWaveContoursBackground(
     val lightTheme = !androidx.compose.foundation.isSystemInDarkTheme()
     val ringCount = 7
     val haloLayerOpacity by animateFloatAsState(
-        targetValue = if (isPlaying) 0.94f else 0.78f,
+        targetValue = if (isPlaying) 0.82f else 0.66f,
         animationSpec = tween(durationMillis = 280, easing = LinearEasing),
         label = "wave_contours_halo_layer"
     )
@@ -6483,7 +6483,24 @@ private fun MyWaveContoursBackground(
         val lineWidths = floatArrayOf(2.8f, 2.5f, 2.2f, 1.9f, 1.7f, 1.5f, 1.2f).map {
             it.dp.toPx() * geometryScale
         }
+        val glowVerticalMaskStops = arrayOf(
+            0.0f to Color.White.copy(alpha = 0.0f),
+            0.08f to Color.White.copy(alpha = 0.34f),
+            0.18f to Color.White.copy(alpha = 1.0f),
+            0.82f to Color.White.copy(alpha = 1.0f),
+            0.92f to Color.White.copy(alpha = 0.34f),
+            1.0f to Color.White.copy(alpha = 0.0f)
+        )
+        val glowHorizontalMaskStops = arrayOf(
+            0.0f to Color.White.copy(alpha = 0.0f),
+            0.06f to Color.White.copy(alpha = 0.26f),
+            0.16f to Color.White.copy(alpha = 1.0f),
+            0.84f to Color.White.copy(alpha = 1.0f),
+            0.94f to Color.White.copy(alpha = 0.26f),
+            1.0f to Color.White.copy(alpha = 0.0f)
+        )
 
+        drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint())
         val baseColors = arrayOf(
             0.0f to (
                 if (lightTheme) blendColors(c1, Color.White, 0.90f) else blendColors(c0, Color.Black, 0.42f)
@@ -6521,8 +6538,8 @@ private fun MyWaveContoursBackground(
         drawCircle(
             brush = Brush.radialGradient(
                 colorStops = arrayOf(
-                    0.0f to haloColor.copy(alpha = (if (lightTheme) 0.22f else 0.28f) * haloLayerOpacity * haloPulseFactor),
-                    0.42f to haloColor.copy(alpha = (if (lightTheme) 0.07f else 0.10f) * haloLayerOpacity * haloPulseFactor),
+                    0.0f to haloColor.copy(alpha = (if (lightTheme) 0.16f else 0.22f) * haloLayerOpacity * haloPulseFactor),
+                    0.42f to haloColor.copy(alpha = (if (lightTheme) 0.05f else 0.08f) * haloLayerOpacity * haloPulseFactor),
                     1.0f to Color.Transparent
                 ),
                 center = haloCenter,
@@ -6560,6 +6577,23 @@ private fun MyWaveContoursBackground(
             center = coreCenter,
             radius = coreRadius * resolvedCoreScale
         )
+        drawRect(
+            brush = Brush.verticalGradient(
+                colorStops = glowVerticalMaskStops,
+                startY = 0f,
+                endY = height
+            ),
+            blendMode = BlendMode.DstIn
+        )
+        drawRect(
+            brush = Brush.horizontalGradient(
+                colorStops = glowHorizontalMaskStops,
+                startX = 0f,
+                endX = width
+            ),
+            blendMode = BlendMode.DstIn
+        )
+        drawContext.canvas.restore()
 
         val linePalette = listOf(
             if (lightTheme) blendColors(c3, Color.Black, 0.22f) else blendColors(c3, Color.White, 0.06f),
