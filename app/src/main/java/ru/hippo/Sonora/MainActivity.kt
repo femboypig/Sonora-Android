@@ -6299,6 +6299,7 @@ private fun HomeMyWaveVisualBackground(
         from = 0.92f,
         to = 1.08f
     )
+    val cardBaseColor = MaterialTheme.colorScheme.background
 
     Box(modifier = modifier) {
         when (look) {
@@ -6316,20 +6317,26 @@ private fun HomeMyWaveVisualBackground(
             MyWaveLook.Contours -> Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .padding(horizontal = 8.dp, vertical = 18.dp)
+                    .background(cardBaseColor)
             ) {
-                val contourResetProgress = rememberMyWaveContourResetProgress(
-                    trackId = track.id,
-                    isPlaying = isPlaying
-                )
-                MyWaveContoursBackground(
-                    colors = listOf(c0, c1, c2, c3),
-                    trackSeed = DEFAULT_MY_WAVE_CONTOUR_SEED,
-                    isPlaying = isPlaying,
-                    visualClockSeconds = visualClockSeconds,
-                    resetProgress = contourResetProgress,
-                    modifier = Modifier.matchParentSize()
-                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .padding(horizontal = 8.dp, vertical = 18.dp)
+                ) {
+                    val contourResetProgress = rememberMyWaveContourResetProgress(
+                        trackId = track.id,
+                        isPlaying = isPlaying
+                    )
+                    MyWaveContoursBackground(
+                        colors = listOf(c0, c1, c2, c3),
+                        trackSeed = DEFAULT_MY_WAVE_CONTOUR_SEED,
+                        isPlaying = isPlaying,
+                        visualClockSeconds = visualClockSeconds,
+                        resetProgress = contourResetProgress,
+                        modifier = Modifier.matchParentSize()
+                    )
+                }
             }
         }
     }
