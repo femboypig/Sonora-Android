@@ -6495,7 +6495,7 @@ private fun MyWaveContoursBackground(
                 size.minDimension * (0.014f + (progress * 0.010f)) *
                     (if (isPlaying) 1.0f else 0.82f) *
                     (1.0f + (((compression * 0.16f) + (neighborPush * 0.10f)) * envelope))
-            val pointCount = if (isPlaying) 44 else 40
+            val pointCount = if (isPlaying) 36 else 32
 
             val contour = Path().apply {
                 for (point in 0..pointCount) {
