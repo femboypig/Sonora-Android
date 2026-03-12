@@ -437,7 +437,7 @@ class PlaybackController(
         if (!advanced) {
             pendingSkipRollback = null
         }
-        if (advanced && !skippedTrackId.isNullOrBlank()) {
+        if (!skippedTrackId.isNullOrBlank() && currentTrackId != skippedTrackId) {
             onTrackSkipped(skippedTrackId)
         }
         return advanced
@@ -451,7 +451,7 @@ class PlaybackController(
         if (!rewound) {
             pendingSkipRollback = null
         }
-        if (rewound && !skippedTrackId.isNullOrBlank()) {
+        if (!skippedTrackId.isNullOrBlank() && currentTrackId != skippedTrackId) {
             onTrackSkipped(skippedTrackId)
         }
         return rewound
@@ -491,7 +491,9 @@ class PlaybackController(
 
     private fun playNextInternal(automatic: Boolean): Boolean {
         val nextIndex = resolveNextIndex(automatic) ?: run {
-            stopAtQueueEnd()
+            if (automatic) {
+                stopAtQueueEnd()
+            }
             return false
         }
 
@@ -506,6 +508,12 @@ class PlaybackController(
     private fun playPreviousInternal(): Boolean {
         if (queue.isEmpty()) {
             return false
+        }
+
+        val hasActivePlayer = exoPlayer != null || mediaPlayer != null
+        if (hasActivePlayer && currentPositionMs() > 3_000L) {
+            seekTo(0L)
+            return true
         }
 
         if (isShuffleEnabled && shuffleHistory.isNotEmpty()) {
@@ -526,7 +534,7 @@ class PlaybackController(
             return playAt(queue.lastIndex)
         }
 
-        return false
+        return restartCurrentTrack()
     }
 
     private fun resolveNextIndex(automatic: Boolean): Int? {
@@ -643,6 +651,32 @@ class PlaybackController(
         }
     }
 
+    private fun restartCurrentTrack(): Boolean {
+        if (queue.isEmpty()) {
+            return false
+        }
+
+        cancelPendingAutoNext()
+
+        if (currentIndex !in queue.indices) {
+            currentIndex = 0
+            currentTrackId = queue.firstOrNull()?.id
+        }
+
+        if (exoPlayer != null || mediaPlayer != null) {
+            seekTo(0L)
+            if (playerPrepared) {
+                exoPlayer?.play()
+                mediaPlayer?.start()
+                isPlaying = true
+                updateExternalState()
+            }
+            return true
+        }
+
+        return playAt(currentIndex)
+    }
+
     private fun playAt(
         index: Int,
         shouldAutoPlay: Boolean = true,
@@ -694,8 +728,8 @@ class PlaybackController(
                 if (restorePendingSkipRollback()) {
                     return true
                 }
-                currentIndex = -1
-                currentTrackId = null
+                playerPrepared = false
+                pendingPlayWhenPrepared = false
                 isPreparing = false
                 isPlaying = false
                 updateExternalState()
@@ -765,8 +799,6 @@ class PlaybackController(
                         pendingPlayWhenPrepared = false
                         isPreparing = false
                         stopPlayer()
-                        currentIndex = -1
-                        currentTrackId = null
                         this@PlaybackController.isPlaying = false
                         updateExternalState()
                         if (!failedTrackId.isNullOrBlank()) {
@@ -831,8 +863,6 @@ class PlaybackController(
                         pendingPlayWhenPrepared = false
                         isPreparing = false
                         stopPlayer()
-                        currentIndex = -1
-                        currentTrackId = null
                         this@PlaybackController.isPlaying = false
                         updateExternalState()
                         if (!failedTrackId.isNullOrBlank()) {
@@ -854,8 +884,8 @@ class PlaybackController(
             if (restorePendingSkipRollback()) {
                 return true
             }
-            currentIndex = -1
-            currentTrackId = null
+            playerPrepared = false
+            pendingPlayWhenPrepared = false
             isPreparing = false
             isPlaying = false
             updateExternalState()
