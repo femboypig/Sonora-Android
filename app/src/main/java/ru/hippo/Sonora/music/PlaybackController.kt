@@ -119,6 +119,7 @@ class PlaybackController(
     private var playRequestToken: Long = 0L
     private var playerPrepared: Boolean = false
     private var pendingPlayWhenPrepared: Boolean = false
+    private var lastPreparedTrackState: SkipRollbackState? = null
     private var pendingSkipRollback: SkipRollbackState? = null
 
     private fun clearPendingSeekHold() {
@@ -466,6 +467,7 @@ class PlaybackController(
     }
 
     fun stop() {
+        lastPreparedTrackState = null
         pendingSkipRollback = null
         cancelPendingAutoNext()
         stopPlayer()
@@ -493,8 +495,9 @@ class PlaybackController(
             return false
         }
 
-        if (isShuffleEnabled && currentIndex >= 0 && nextIndex != currentIndex) {
-            shuffleHistory.addLast(currentIndex)
+        val navigationIndex = navigationAnchorIndex()
+        if (isShuffleEnabled && navigationIndex >= 0 && nextIndex != navigationIndex) {
+            shuffleHistory.addLast(navigationIndex)
         }
 
         return playAt(nextIndex)
@@ -507,13 +510,14 @@ class PlaybackController(
 
         if (isShuffleEnabled && shuffleHistory.isNotEmpty()) {
             val previous = shuffleHistory.removeLast()
-            if (currentIndex >= 0 && currentIndex != previous) {
-                shuffleBag.addFirst(currentIndex)
+            val navigationIndex = navigationAnchorIndex()
+            if (navigationIndex >= 0 && navigationIndex != previous) {
+                shuffleBag.addFirst(navigationIndex)
             }
             return playAt(previous)
         }
 
-        val previousIndex = currentIndex - 1
+        val previousIndex = navigationAnchorIndex() - 1
         if (previousIndex >= 0) {
             return playAt(previousIndex)
         }
@@ -530,19 +534,20 @@ class PlaybackController(
             return null
         }
 
-        if (currentIndex < 0) {
+        val navigationIndex = navigationAnchorIndex()
+        if (navigationIndex < 0) {
             return 0
         }
 
         if (automatic && repeatMode == RepeatMode.Track) {
-            return currentIndex
+            return navigationIndex
         }
 
         if (isShuffleEnabled) {
             return nextShuffleIndex()
         }
 
-        val next = currentIndex + 1
+        val next = navigationIndex + 1
         if (next <= queue.lastIndex) {
             return next
         }
@@ -555,25 +560,26 @@ class PlaybackController(
             return null
         }
 
-        if (currentIndex < 0) {
+        val navigationIndex = navigationAnchorIndex()
+        if (navigationIndex < 0) {
             return 0
         }
 
         if (isShuffleEnabled) {
             if (queue.size == 1) {
-                return if (repeatMode == RepeatMode.None) null else currentIndex
+                return if (repeatMode == RepeatMode.None) null else navigationIndex
             }
             if (shuffleBag.isNotEmpty()) {
                 return shuffleBag.firstOrNull()
             }
-            val fallback = queue.indices.firstOrNull { it != currentIndex }
+            val fallback = queue.indices.firstOrNull { it != navigationIndex }
             if (repeatMode == RepeatMode.Queue) {
-                return fallback ?: currentIndex
+                return fallback ?: navigationIndex
             }
             return fallback
         }
 
-        val next = currentIndex + 1
+        val next = navigationIndex + 1
         if (next <= queue.lastIndex) {
             return next
         }
@@ -585,12 +591,13 @@ class PlaybackController(
             return null
         }
 
+        val navigationIndex = navigationAnchorIndex()
         if (queue.size == 1) {
             return if (repeatMode == RepeatMode.None) null else 0
         }
 
         if (shuffleBag.isEmpty()) {
-            refillShuffleBag(excluding = currentIndex)
+            refillShuffleBag(excluding = navigationIndex)
         }
 
         val next = shuffleBag.removeFirstOrNull()
@@ -599,7 +606,7 @@ class PlaybackController(
         }
 
         if (repeatMode == RepeatMode.Queue) {
-            refillShuffleBag(excluding = currentIndex)
+            refillShuffleBag(excluding = navigationIndex)
             return shuffleBag.removeFirstOrNull()
         }
 
@@ -644,6 +651,9 @@ class PlaybackController(
         val track = queue.getOrNull(index) ?: return false
 
         cancelPendingAutoNext()
+        if (!isPreparing && playerPrepared) {
+            snapshotCurrentTrackState()?.let { lastPreparedTrackState = it }
+        }
         clearPendingSeekHold()
         if (initialSeekPositionMs >= 0L) {
             pendingSeekPositionMs = initialSeekPositionMs
@@ -724,6 +734,10 @@ class PlaybackController(
                                 } else {
                                     this@PlaybackController.isPlaying = false
                                 }
+                                snapshotCurrentTrackState(
+                                    positionMs = pendingSeek.takeIf { it >= 0L } ?: 0L,
+                                    shouldResumePlaying = pendingPlayWhenPrepared
+                                )?.let { lastPreparedTrackState = it }
                                 pendingSkipRollback = null
                             }
                             updateExternalState()
@@ -794,6 +808,10 @@ class PlaybackController(
                     } else {
                         this@PlaybackController.isPlaying = false
                     }
+                    snapshotCurrentTrackState(
+                        positionMs = pendingSeek.takeIf { it >= 0L } ?: 0L,
+                        shouldResumePlaying = pendingPlayWhenPrepared
+                    )?.let { lastPreparedTrackState = it }
                     pendingSkipRollback = null
                     updateExternalState()
                 }
@@ -885,6 +903,7 @@ class PlaybackController(
     }
 
     private fun stopAtQueueEnd() {
+        lastPreparedTrackState = null
         pendingSkipRollback = null
         cancelPendingAutoNext()
         stopPlayer()
@@ -906,9 +925,21 @@ class PlaybackController(
     }
 
     private fun captureSkipRollbackState(): SkipRollbackState? {
-        if (isPreparing || !playerPrepared) {
-            return null
+        if (!isPreparing && playerPrepared) {
+            snapshotCurrentTrackState()?.let { return it }
         }
+        lastPreparedTrackState?.let { stable ->
+            if (stable.index in queue.indices && queue.getOrNull(stable.index)?.id == stable.trackId) {
+                return stable
+            }
+        }
+        return null
+    }
+
+    private fun snapshotCurrentTrackState(
+        positionMs: Long = currentPositionMs(),
+        shouldResumePlaying: Boolean = isPlaying || pendingPlayWhenPrepared
+    ): SkipRollbackState? {
         val trackId = currentTrackId ?: return null
         if (currentIndex !in queue.indices) {
             return null
@@ -921,9 +952,19 @@ class PlaybackController(
             queue = queueSnapshot,
             index = currentIndex,
             trackId = trackId,
-            positionMs = currentPositionMs(),
-            shouldResumePlaying = isPlaying || pendingPlayWhenPrepared
+            positionMs = positionMs.coerceAtLeast(0L),
+            shouldResumePlaying = shouldResumePlaying
         )
+    }
+
+    private fun navigationAnchorIndex(): Int {
+        if (isPreparing) {
+            val stable = lastPreparedTrackState
+            if (stable != null && stable.index in queue.indices && queue.getOrNull(stable.index)?.id == stable.trackId) {
+                return stable.index
+            }
+        }
+        return currentIndex
     }
 
     private fun restorePendingSkipRollback(): Boolean {
