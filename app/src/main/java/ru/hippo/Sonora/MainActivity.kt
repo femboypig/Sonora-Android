@@ -2858,7 +2858,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         }
     }
 
-    val miniPlayerTrack = playbackController.currentTrack ?: miniStreamingPendingTrack
+    val miniPlayerTrack = playbackController.displayTrack ?: miniStreamingPendingTrack
     val miniPlayerVisible = !inPlaylistDetail &&
         !inOverlayScreen &&
         !inSubPage &&
@@ -4084,7 +4084,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             }
 
             val activeMiniTrack = miniPlayerTrack
-            val visiblePlaybackId = playbackController.currentTrackId ?: miniStreamingPendingTrack?.id
+            val visiblePlaybackId = playbackController.displayTrackId ?: miniStreamingPendingTrack?.id
             val visibleMiniTrackId = miniStreamingTrackIdFromPlaybackId(visiblePlaybackId)
             val visibleMiniTrackIndex = if (visibleMiniTrackId.isNullOrBlank()) {
                 -1
@@ -4162,7 +4162,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 }
             }
 
-            val playerTrack = playbackController.currentTrack ?: miniStreamingPendingTrack
+            val playerTrack = playbackController.displayTrack ?: miniStreamingPendingTrack
             if (playerVisible && playerTrack != null) {
                 val isFavorite = tracks.firstOrNull { it.id == playerTrack.id }?.isFavorite
                     ?: playerTrack.isFavorite

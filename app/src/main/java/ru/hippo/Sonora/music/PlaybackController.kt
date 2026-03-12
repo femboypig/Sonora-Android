@@ -96,6 +96,22 @@ class PlaybackController(
     val currentTrack: TrackItem?
         get() = queue.getOrNull(currentIndex)
 
+    val displayTrack: TrackItem?
+        get() {
+            if (!isPreparing) {
+                return currentTrack
+            }
+            val stableTrackId = lastPreparedTrackState?.trackId
+            if (!stableTrackId.isNullOrBlank()) {
+                queue.firstOrNull { it.id == stableTrackId }?.let { return it }
+                lastPreparedTrackState?.queue?.firstOrNull { it.id == stableTrackId }?.let { return it }
+            }
+            return currentTrack
+        }
+
+    val displayTrackId: String?
+        get() = displayTrack?.id ?: currentTrackId
+
     private val appContext = context.applicationContext
     private val notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val mediaSession = MediaSession(appContext, "SonoraPlayback")
@@ -508,12 +524,6 @@ class PlaybackController(
     private fun playPreviousInternal(): Boolean {
         if (queue.isEmpty()) {
             return false
-        }
-
-        val hasActivePlayer = exoPlayer != null || mediaPlayer != null
-        if (hasActivePlayer && currentPositionMs() > 3_000L) {
-            seekTo(0L)
-            return true
         }
 
         if (isShuffleEnabled && shuffleHistory.isNotEmpty()) {
