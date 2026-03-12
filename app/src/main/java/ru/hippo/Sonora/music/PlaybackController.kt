@@ -253,15 +253,16 @@ class PlaybackController(
             return
         }
 
-        val shouldCountSkip = isPlaying && currentTrackId != null && currentTrackId != targetTrackId
-        if (shouldCountSkip) {
-            recordSkipCurrentTrack()
-        }
+        val skippedTrackId = currentTrackId
+            ?.takeIf { isPlaying && it != targetTrackId }
 
         this.queue = queue
         queueCount = queue.size
         resetShuffleState()
         playAt(index)
+        if (!skippedTrackId.isNullOrBlank()) {
+            onTrackSkipped(skippedTrackId)
+        }
     }
 
     fun isQueueMatching(queue: List<TrackItem>): Boolean {
@@ -419,14 +420,22 @@ class PlaybackController(
 
     fun playNextFromUser(): Boolean {
         cancelPendingAutoNext()
-        recordSkipCurrentTrack()
-        return playNextInternal(automatic = false)
+        val skippedTrackId = currentTrackId
+        val advanced = playNextInternal(automatic = false)
+        if (!skippedTrackId.isNullOrBlank()) {
+            onTrackSkipped(skippedTrackId)
+        }
+        return advanced
     }
 
     fun playPreviousFromUser(): Boolean {
         cancelPendingAutoNext()
-        recordSkipCurrentTrack()
-        return playPreviousInternal()
+        val skippedTrackId = currentTrackId
+        val rewound = playPreviousInternal()
+        if (!skippedTrackId.isNullOrBlank()) {
+            onTrackSkipped(skippedTrackId)
+        }
+        return rewound
     }
 
     fun handleExternalAction(action: String) {
@@ -863,11 +872,6 @@ class PlaybackController(
             }
         }
         return true
-    }
-
-    private fun recordSkipCurrentTrack() {
-        val trackId = currentTrackId ?: return
-        onTrackSkipped(trackId)
     }
 
     private fun updateExternalState() {
