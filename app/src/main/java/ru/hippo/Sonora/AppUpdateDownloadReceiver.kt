@@ -17,6 +17,10 @@ import androidx.core.content.ContextCompat
 private const val APP_UPDATE_NOTIFICATION_CHANNEL_ID = "sonora_app_updates"
 private const val APP_UPDATE_NOTIFICATION_ID = 2042
 
+internal fun cancelAndroidAppUpdateReadyNotification(context: Context) {
+    NotificationManagerCompat.from(context).cancel(APP_UPDATE_NOTIFICATION_ID)
+}
+
 internal fun showAndroidAppUpdateReadyNotification(
     context: Context,
     release: AndroidAppUpdateRelease

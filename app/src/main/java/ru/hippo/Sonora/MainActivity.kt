@@ -790,6 +790,11 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     ): AndroidAppUpdateState {
         if (snapshot == null) {
             return base.copy(
+                statusMessage = if (base.downloadId != null || base.downloadReady || base.downloading || !base.downloadedApkPath.isNullOrBlank()) {
+                    null
+                } else {
+                    base.statusMessage
+                },
                 downloading = false,
                 downloadProgress = 0f,
                 downloadId = null,
@@ -828,7 +833,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
 
     fun refreshAndroidAppUpdateDownloadState() {
-        val snapshot = readAndroidAppUpdateDownloadSnapshot(context)
+        val snapshot = readActiveAndroidAppUpdateDownloadSnapshot(context, appVersionCode)
         androidAppUpdateState = mergeAndroidAppUpdateState(androidAppUpdateState, snapshot)
     }
 
@@ -855,7 +860,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         }
         while (true) {
             val snapshot = withContext(Dispatchers.IO) {
-                readAndroidAppUpdateDownloadSnapshot(context, activeDownloadId)
+                readActiveAndroidAppUpdateDownloadSnapshot(context, appVersionCode, activeDownloadId)
             }
             androidAppUpdateState = mergeAndroidAppUpdateState(androidAppUpdateState, snapshot)
             if (snapshot == null ||
@@ -874,7 +879,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             return@LaunchedEffect
         }
         val snapshot = withContext(Dispatchers.IO) {
-            readAndroidAppUpdateDownloadSnapshot(context, readyDownloadId)
+            readActiveAndroidAppUpdateDownloadSnapshot(context, appVersionCode, readyDownloadId)
         } ?: return@LaunchedEffect
         if (snapshot.status == DownloadManager.STATUS_SUCCESSFUL) {
             showAndroidAppUpdateReadyNotification(context, snapshot)
@@ -3633,7 +3638,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                                     statusMessage = "Could not check for updates"
                                 )
                                 val snapshot = withContext(Dispatchers.IO) {
-                                    readAndroidAppUpdateDownloadSnapshot(context)
+                                    readActiveAndroidAppUpdateDownloadSnapshot(context, appVersionCode)
                                 }
                                 androidAppUpdateState = mergeAndroidAppUpdateState(baseState, snapshot)
                                 if (fetched?.updateAvailable == true) {
@@ -12242,6 +12247,7 @@ private fun appUpdateDownloadPrefs(context: Context) =
 
 fun clearAndroidAppUpdateDownloadState(context: Context) {
     appUpdateDownloadPrefs(context).edit().clear().apply()
+    cancelAndroidAppUpdateReadyNotification(context)
 }
 
 fun cancelAndroidAppUpdateDownload(context: Context, downloadId: Long?): Boolean {
@@ -12332,6 +12338,34 @@ fun readAndroidAppUpdateDownloadSnapshot(
             totalBytes = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)).coerceAtLeast(0L)
         )
     }
+}
+
+private fun discardAndroidAppUpdateDownloadState(
+    context: Context,
+    downloadId: Long?,
+    apkPath: String?
+) {
+    val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+    if (downloadId != null) {
+        runCatching { manager?.remove(downloadId) }
+    }
+    if (!apkPath.isNullOrBlank()) {
+        runCatching { File(apkPath).delete() }
+    }
+    clearAndroidAppUpdateDownloadState(context)
+}
+
+private fun readActiveAndroidAppUpdateDownloadSnapshot(
+    context: Context,
+    currentVersionCode: Long,
+    requestedDownloadId: Long? = null
+): AndroidAppUpdateDownloadSnapshot? {
+    val snapshot = readAndroidAppUpdateDownloadSnapshot(context, requestedDownloadId) ?: return null
+    if (snapshot.release.versionCode in 1..currentVersionCode) {
+        discardAndroidAppUpdateDownloadState(context, snapshot.downloadId, snapshot.apkPath)
+        return null
+    }
+    return snapshot
 }
 
 internal fun readStoredAndroidAppUpdateRelease(
