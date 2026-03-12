@@ -101,6 +101,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
@@ -6297,13 +6298,9 @@ private fun HomeMyWaveVisualBackground(
                     .matchParentSize()
                     .padding(horizontal = 8.dp, vertical = 18.dp)
             ) {
-                val animatedTrackSeed by animateFloatAsState(
-                    targetValue = waveTrackSeed(track.id),
-                    animationSpec = tween(
-                        durationMillis = if (isPlaying) 1650 else 1850,
-                        easing = androidx.compose.animation.core.FastOutSlowInEasing
-                    ),
-                    label = "wave_track_seed"
+                val animatedTrackSeed = rememberAnimatedWaveTrackSeed(
+                    trackId = track.id,
+                    isPlaying = isPlaying
                 )
                 MyWaveContoursBackground(
                     colors = listOf(c0, c1, c2, c3),
@@ -6709,6 +6706,35 @@ private fun waveGradientRadius(size: Size, center: Offset): Float {
 
 private fun waveTrackSeed(trackId: String): Float {
     return ((((trackId.hashCode().toLong() and 0xffffffffL) % 1000L).toFloat()) / 1000f).coerceIn(0f, 1f)
+}
+
+@Composable
+private fun rememberAnimatedWaveTrackSeed(
+    trackId: String,
+    isPlaying: Boolean
+): Float {
+    val targetSeed = remember(trackId) { waveTrackSeed(trackId) }
+    val animatable = remember { Animatable(targetSeed) }
+
+    LaunchedEffect(targetSeed, isPlaying) {
+        val currentValue = animatable.value
+        val currentWrapped = waveWrap01(currentValue)
+        var delta = targetSeed - currentWrapped
+        if (delta > 0.5f) {
+            delta -= 1.0f
+        } else if (delta < -0.5f) {
+            delta += 1.0f
+        }
+        animatable.animateTo(
+            targetValue = currentValue + delta,
+            animationSpec = tween(
+                durationMillis = if (isPlaying) 1700 else 1900,
+                easing = androidx.compose.animation.core.FastOutSlowInEasing
+            )
+        )
+    }
+
+    return waveWrap01(animatable.value)
 }
 
 private fun currentMyWaveAnimationClockSeconds(): Float {
