@@ -2261,6 +2261,29 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         }
     }
 
+    fun scheduleMiniStreamingBackgroundInstall(
+        track: MiniStreamingTrack,
+        payload: MiniStreamingDownloadPayload,
+        delayMs: Long = 1000L
+    ) {
+        scope.launch {
+            delay(delayMs)
+            if (miniStreamingActiveTrackId != track.trackId) {
+                return@launch
+            }
+            val currentPlaybackId = playbackController.currentTrackId
+            val expectedPlaybackId = miniStreamingPlaybackIdForTrack(track.trackId)
+            if (!currentPlaybackId.isNullOrBlank() && currentPlaybackId != expectedPlaybackId) {
+                return@launch
+            }
+            launchMiniStreamingInstall(
+                track = track,
+                initialPayload = payload,
+                showErrorMessage = false
+            )
+        }
+    }
+
     fun playMiniStreamingTrack(
         track: MiniStreamingTrack,
         queue: List<MiniStreamingTrack>,
@@ -2323,6 +2346,10 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
                 if (playbackQueue.any { it.id == targetPlaybackId }) {
                     playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
+                    scheduleMiniStreamingBackgroundInstall(
+                        track = track,
+                        payload = payload
+                    )
                     prefetchMiniStreamingQueuePayloads(
                         queue = miniStreamingPlaybackQueue,
                         startIndexExclusive = normalizedStartIndex + 1
