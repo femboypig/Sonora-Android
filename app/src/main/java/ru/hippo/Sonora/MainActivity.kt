@@ -539,6 +539,7 @@ private const val MINI_STREAMING_SEARCH_DEBOUNCE_MS = 280L
 private const val MINI_STREAMING_TRACKS_SEARCH_LIMIT = 8
 private const val MINI_STREAMING_ARTISTS_SEARCH_LIMIT = 10
 private const val MINI_STREAMING_ARTIST_PAGE_SIZE = 60
+private const val DEFAULT_MY_WAVE_CONTOUR_SEED = 0.43f
 private val MyWaveAnimationEpochNanos = SystemClock.elapsedRealtimeNanos()
 private val TrackGapSecondsOptions = listOf(0f, 0.5f, 1f, 1.5f, 2f, 3f, 5f, 8f)
 private val MaxStorageMbOptions = listOf(-1, 512, 1024, 2048, 3072, 4096, 6144, 8192)
@@ -6320,15 +6321,16 @@ private fun HomeMyWaveVisualBackground(
                     .matchParentSize()
                     .padding(horizontal = 8.dp, vertical = 18.dp)
             ) {
-                val animatedTrackSeed = rememberAnimatedWaveTrackSeed(
+                val contourResetProgress = rememberMyWaveContourResetProgress(
                     trackId = track.id,
                     isPlaying = isPlaying
                 )
                 MyWaveContoursBackground(
                     colors = listOf(c0, c1, c2, c3),
-                    trackSeed = animatedTrackSeed,
+                    trackSeed = DEFAULT_MY_WAVE_CONTOUR_SEED,
                     isPlaying = isPlaying,
                     visualClockSeconds = visualClockSeconds,
+                    resetProgress = contourResetProgress,
                     modifier = Modifier.matchParentSize()
                 )
             }
@@ -6427,6 +6429,7 @@ private fun MyWaveContoursBackground(
     trackSeed: Float,
     isPlaying: Boolean,
     visualClockSeconds: Float,
+    resetProgress: Float,
     modifier: Modifier = Modifier
 ) {
     val c0 = colors.getOrElse(0) { Color(0xFF4A3E35) }
@@ -6501,6 +6504,7 @@ private fun MyWaveContoursBackground(
             from = if (isPlaying) 0.96f else 0.985f,
             to = if (isPlaying) 1.08f else 1.03f
         )
+        val resolvedHaloScale = lerp(haloScale, 1.0f, resetProgress)
         val haloPulseFactor = waveAutoReverseValue(
             time = t,
             duration = if (isPlaying) 3.6f else 5.4f,
@@ -6516,10 +6520,10 @@ private fun MyWaveContoursBackground(
                     1.0f to Color.Transparent
                 ),
                 center = haloCenter,
-                radius = haloRadius * haloScale
+                radius = haloRadius * resolvedHaloScale
             ),
             center = haloCenter,
-            radius = haloRadius * haloScale
+            radius = haloRadius * resolvedHaloScale
         )
 
         val coreScale = waveAutoReverseValue(
@@ -6528,6 +6532,7 @@ private fun MyWaveContoursBackground(
             from = if (isPlaying) 0.92f else 0.96f,
             to = if (isPlaying) 1.04f else 1.01f
         )
+        val resolvedCoreScale = lerp(coreScale, 1.0f, resetProgress)
         val corePulseFactor = waveAutoReverseValue(
             time = t,
             duration = if (isPlaying) 4.8f else 6.6f,
@@ -6544,10 +6549,10 @@ private fun MyWaveContoursBackground(
                     1.0f to Color.Transparent
                 ),
                 center = coreCenter,
-                radius = coreRadius * coreScale
+                radius = coreRadius * resolvedCoreScale
             ),
             center = coreCenter,
-            radius = coreRadius * coreScale
+            radius = coreRadius * resolvedCoreScale
         )
 
         val linePalette = listOf(
@@ -6562,7 +6567,7 @@ private fun MyWaveContoursBackground(
             val progress = index / (ringCount - 1f).toFloat()
             val pathDuration = (8.4f + (index * 0.85f)) * durationMultiplier
             val pathCycle = waveWrap01((t + (index * 0.08f)) / pathDuration)
-            val variant = waveContourVariant(pathCycle)
+            val variant = lerp(waveContourVariant(pathCycle), 0f, resetProgress)
             val contour = buildWaveContourPath(index = index, ringCount = ringCount, pulseSeed = trackSeed, variant = variant)
 
             val baseOpacity = if (isPlaying) {
@@ -6599,6 +6604,7 @@ private fun MyWaveContoursBackground(
             } else {
                 1.0f
             }
+            val resolvedLineScale = lerp(lineScale, 1.0f, resetProgress)
             val rotationBaseDegrees = (0.0016f + (index * 0.0006f)) * (180f / Math.PI.toFloat())
             val rotationDegrees = if (isPlaying) {
                 waveAutoReverseValue(
@@ -6610,16 +6616,17 @@ private fun MyWaveContoursBackground(
             } else {
                 0.0f
             }
+            val resolvedRotationDegrees = lerp(rotationDegrees, 0.0f, resetProgress)
 
             val lineColor = linePalette[index % linePalette.size].copy(alpha = baseStrokeAlpha * animatedOpacity)
             val lineWidth = lineWidths[index]
 
             withTransform({
-                if (rotationDegrees != 0.0f) {
-                    rotate(degrees = rotationDegrees, pivot = canvasCenter)
+                if (resolvedRotationDegrees != 0.0f) {
+                    rotate(degrees = resolvedRotationDegrees, pivot = canvasCenter)
                 }
-                if (lineScale != 1.0f) {
-                    scale(scaleX = lineScale, scaleY = lineScale, pivot = canvasCenter)
+                if (resolvedLineScale != 1.0f) {
+                    scale(scaleX = resolvedLineScale, scaleY = resolvedLineScale, pivot = canvasCenter)
                 }
             }) {
                 drawPath(
@@ -6726,37 +6733,37 @@ private fun waveGradientRadius(size: Size, center: Offset): Float {
     return sqrt((dx * dx) + (dy * dy)).coerceAtLeast(1f)
 }
 
-private fun waveTrackSeed(trackId: String): Float {
-    return ((((trackId.hashCode().toLong() and 0xffffffffL) % 1000L).toFloat()) / 1000f).coerceIn(0f, 1f)
-}
-
 @Composable
-private fun rememberAnimatedWaveTrackSeed(
+private fun rememberMyWaveContourResetProgress(
     trackId: String,
     isPlaying: Boolean
 ): Float {
-    val targetSeed = remember(trackId) { waveTrackSeed(trackId) }
-    val animatable = remember { Animatable(targetSeed) }
+    val resetProgress = remember { Animatable(0f) }
+    var previousTrackId by remember { mutableStateOf(trackId) }
 
-    LaunchedEffect(targetSeed, isPlaying) {
-        val currentValue = animatable.value
-        val currentWrapped = waveWrap01(currentValue)
-        var delta = targetSeed - currentWrapped
-        if (delta > 0.5f) {
-            delta -= 1.0f
-        } else if (delta < -0.5f) {
-            delta += 1.0f
-        }
-        animatable.animateTo(
-            targetValue = currentValue + delta,
-            animationSpec = tween(
-                durationMillis = if (isPlaying) 1700 else 1900,
-                easing = androidx.compose.animation.core.FastOutSlowInEasing
+    LaunchedEffect(trackId, isPlaying) {
+        if (previousTrackId != trackId) {
+            previousTrackId = trackId
+            resetProgress.stop()
+            resetProgress.animateTo(
+                targetValue = 1.0f,
+                animationSpec = tween(
+                    durationMillis = if (isPlaying) 520 else 640,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                )
             )
-        )
+            delay(if (isPlaying) 90L else 140L)
+            resetProgress.animateTo(
+                targetValue = 0.0f,
+                animationSpec = tween(
+                    durationMillis = if (isPlaying) 900 else 1100,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing
+                )
+            )
+        }
     }
 
-    return waveWrap01(animatable.value)
+    return resetProgress.value
 }
 
 private fun currentMyWaveAnimationClockSeconds(): Float {
