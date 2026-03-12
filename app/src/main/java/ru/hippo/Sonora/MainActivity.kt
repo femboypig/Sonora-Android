@@ -322,11 +322,23 @@ private enum class MyWaveLook(val storageValue: String, val label: String) {
     }
 }
 
+private enum class StreamingSearchEngine(val storageValue: String, val label: String) {
+    Spotify("spotify", "Spotify"),
+    YouTube("youtube", "YouTube");
+
+    companion object {
+        fun fromStorage(value: String?): StreamingSearchEngine {
+            return values().firstOrNull { it.storageValue == value } ?: Spotify
+        }
+    }
+}
+
 private data class SonoraAppSettings(
     val sliderStyle: PlayerSliderStyle = PlayerSliderStyle.Wave,
     val artworkStyle: ArtworkStyle = ArtworkStyle.Square,
     val fontStyle: AppFontStyle = AppFontStyle.System,
     val myWaveLook: MyWaveLook = MyWaveLook.Contours,
+    val streamingSearchEngine: StreamingSearchEngine = StreamingSearchEngine.Spotify,
     val accentHex: String = DEFAULT_ACCENT_HEX,
     val preservePlayerModes: Boolean = true,
     val trackGapSeconds: Float = 0f,
@@ -397,6 +409,9 @@ private class SonoraSettingsStore(context: Context) {
             artworkStyle = ArtworkStyle.fromStorage(prefs.getString(KEY_ARTWORK_STYLE, ArtworkStyle.Square.storageValue)),
             fontStyle = AppFontStyle.fromStorage(prefs.getString(KEY_FONT_STYLE, AppFontStyle.System.storageValue)),
             myWaveLook = MyWaveLook.fromStorage(prefs.getString(KEY_MY_WAVE_LOOK, MyWaveLook.Contours.storageValue)),
+            streamingSearchEngine = StreamingSearchEngine.fromStorage(
+                prefs.getString(KEY_STREAMING_SEARCH_ENGINE, StreamingSearchEngine.Spotify.storageValue)
+            ),
             accentHex = accentHex,
             preservePlayerModes = prefs.getBoolean(KEY_PRESERVE_PLAYER_MODES, true),
             trackGapSeconds = nearestTrackGapSecondsOption(prefs.getFloat(KEY_TRACK_GAP, 0f)),
@@ -412,6 +427,7 @@ private class SonoraSettingsStore(context: Context) {
             .putString(KEY_ARTWORK_STYLE, settings.artworkStyle.storageValue)
             .putString(KEY_FONT_STYLE, settings.fontStyle.storageValue)
             .putString(KEY_MY_WAVE_LOOK, settings.myWaveLook.storageValue)
+            .putString(KEY_STREAMING_SEARCH_ENGINE, settings.streamingSearchEngine.storageValue)
             .putString(KEY_ACCENT_HEX, normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX)
             .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
             .putFloat(KEY_TRACK_GAP, nearestTrackGapSecondsOption(settings.trackGapSeconds))
@@ -515,6 +531,7 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_ARTWORK_STYLE = "artwork_style"
         const val KEY_FONT_STYLE = "font_style"
         const val KEY_MY_WAVE_LOOK = "my_wave_look"
+        const val KEY_STREAMING_SEARCH_ENGINE = "streaming_search_engine"
         const val KEY_ACCENT_HEX = "accent_hex"
         const val KEY_ACCENT_HUE = "accent_hue"
         const val KEY_ACCENT_COLOR_LEGACY = "accent_color"
@@ -705,6 +722,9 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         mutableStateOf(sharedPlaylistStore.loadPlaylists().map(::sanitizeSharedPlaylistEntry))
     }
     var appSettings by remember { mutableStateOf(settingsStore.load()) }
+    LaunchedEffect(appSettings.streamingSearchEngine) {
+        miniStreamingClient.preferredSearchEngine = appSettings.streamingSearchEngine.storageValue
+    }
     var storageUsageBytes by remember { mutableLongStateOf(0L) }
     var sharedPlaylistAudioCacheUsageBytes by remember {
         mutableLongStateOf(sharedPlaylistStore.audioCacheUsageBytes())
@@ -2222,17 +2242,41 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             return alreadyInstalled
         }
 
+        val preferredTitle = track.title.ifBlank { payload.title.ifBlank { "Track" } }
+        val preferredArtist = track.artists.ifBlank { payload.artist.ifBlank { "Spotify" } }
+        val preferredArtworkUrl = track.artworkUrl.ifBlank { payload.artworkUrl }
+        val isYoutubeEngine = appSettings.streamingSearchEngine == StreamingSearchEngine.YouTube
+        val importedArtworkPath = withContext(Dispatchers.IO) {
+            val artworkBytes = preferredArtworkUrl
+                .takeIf { it.isNotBlank() }
+                ?.let { artworkUrl -> trackStore.downloadRemoteBytes(artworkUrl) }
+            if (isYoutubeEngine && extension == "mp3") {
+                trackStore.rewriteDownloadedMp3Metadata(
+                    filePath = destination.absolutePath,
+                    preferredTitle = preferredTitle,
+                    preferredArtist = preferredArtist,
+                    preferredArtwork = artworkBytes
+                )
+            }
+            artworkBytes?.let { bytes ->
+                trackStore.importArtworkBytes(
+                    bytes = bytes,
+                    suggestedName = "${track.trackId}_cover.jpg"
+                )
+            }
+        }
+
         val newTrack = TrackItem(
             id = UUID.randomUUID().toString(),
-            title = track.title.ifBlank { payload.title.ifBlank { "Track" } },
-            artist = track.artists.ifBlank { payload.artist.ifBlank { "Spotify" } },
+            title = preferredTitle,
+            artist = preferredArtist,
             durationMs = when {
                 track.durationMs > 0L -> track.durationMs
                 payload.durationMs > 0L -> payload.durationMs
                 else -> 0L
             },
             filePath = destination.absolutePath,
-            artworkPath = track.artworkUrl.ifBlank { payload.artworkUrl },
+            artworkPath = importedArtworkPath ?: preferredArtworkUrl,
             addedAt = System.currentTimeMillis(),
             isFavorite = false
         )
@@ -2720,6 +2764,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                                     sliderStyle = settingsSnapshot.sliderStyle.storageValue,
                                     artworkStyle = settingsSnapshot.artworkStyle.storageValue,
                                     fontStyle = settingsSnapshot.fontStyle.storageValue,
+                                    streamingSearchEngine = settingsSnapshot.streamingSearchEngine.storageValue,
                                     accentHex = settingsSnapshot.accentHex,
                                     preservePlayerModes = settingsSnapshot.preservePlayerModes,
                                     trackGapSeconds = settingsSnapshot.trackGapSeconds,
@@ -2793,6 +2838,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                         sliderStyle = PlayerSliderStyle.fromStorage(restoredSettings.sliderStyle),
                         artworkStyle = ArtworkStyle.fromStorage(restoredSettings.artworkStyle),
                         fontStyle = AppFontStyle.fromStorage(restoredSettings.fontStyle),
+                        streamingSearchEngine = StreamingSearchEngine.fromStorage(restoredSettings.streamingSearchEngine),
                         accentHex = normalizeHexColor(restoredSettings.accentHex) ?: DEFAULT_ACCENT_HEX,
                         preservePlayerModes = restoredSettings.preservePlayerModes,
                         trackGapSeconds = nearestTrackGapSecondsOption(restoredSettings.trackGapSeconds),
@@ -7480,6 +7526,18 @@ private fun SettingsPage(
                     color = accentPreview,
                     onClick = {
                         showAccentColorDialog = true
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsChoiceRow(
+                    title = "Streaming search engine",
+                    subtitle = "Choose provider for online tracks",
+                    options = StreamingSearchEngine.values().map { it.label },
+                    selectedIndex = StreamingSearchEngine.values().indexOf(settings.streamingSearchEngine),
+                    onSelect = { index ->
+                        val selected = StreamingSearchEngine.values()
+                            .getOrElse(index) { StreamingSearchEngine.Spotify }
+                        onSettingsChange(settings.copy(streamingSearchEngine = selected))
                     }
                 )
                 Spacer(modifier = Modifier.height(12.dp))

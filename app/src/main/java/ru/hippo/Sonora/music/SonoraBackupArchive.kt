@@ -18,6 +18,7 @@ data class SonoraBackupSettings(
     val sliderStyle: String,
     val artworkStyle: String,
     val fontStyle: String,
+    val streamingSearchEngine: String,
     val accentHex: String,
     val preservePlayerModes: Boolean,
     val trackGapSeconds: Float,
@@ -159,6 +160,7 @@ object SonoraBackupArchive {
             settingsObject.put("sliderStyle", settings.sliderStyle)
             settingsObject.put("artworkStyle", settings.artworkStyle)
             settingsObject.put("fontStyle", settings.fontStyle)
+            settingsObject.put("streamingSearchEngine", settings.streamingSearchEngine)
             settingsObject.put("accentHex", settings.accentHex)
             settingsObject.put("preservePlayerModes", settings.preservePlayerModes)
             settingsObject.put("trackGapSeconds", settings.trackGapSeconds.toDouble())
@@ -445,6 +447,7 @@ object SonoraBackupArchive {
             sliderStyle = item.optString("sliderStyle").ifBlank { "wave" },
             artworkStyle = item.optString("artworkStyle").ifBlank { "square" },
             fontStyle = item.optString("fontStyle").ifBlank { "system" },
+            streamingSearchEngine = item.optString("streamingSearchEngine").ifBlank { "spotify" },
             accentHex = item.optString("accentHex").ifBlank { "#E6BE00" },
             preservePlayerModes = item.optBoolean("preservePlayerModes", true),
             trackGapSeconds = item.optDouble("trackGapSeconds", 0.0).toFloat(),

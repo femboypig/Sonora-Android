@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.mpatric.mp3agic.ID3v24Tag
+import com.mpatric.mp3agic.Mp3File
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -182,31 +184,112 @@ class TrackStore(private val context: Context) {
     }
 
     fun importRemoteArtwork(urlString: String, suggestedName: String = "cover.jpg"): String? {
+        val bytes = downloadRemoteBytes(urlString) ?: return null
+        return importArtworkBytes(bytes, suggestedName)
+    }
+
+    fun downloadRemoteBytes(
+        urlString: String,
+        connectTimeoutMs: Int = 15_000,
+        readTimeoutMs: Int = 120_000
+    ): ByteArray? {
         if (urlString.isBlank()) {
             return null
         }
 
-        val fileExtension = sanitizeExtension(
-            suggestedName.substringAfterLast('.', urlString.substringAfterLast('.', "jpg"))
-        )
+        return runCatching {
+            val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                instanceFollowRedirects = true
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
+                setRequestProperty("User-Agent", "SonoraAndroid/1.0")
+            }
+            connection.connect()
+            if (connection.responseCode !in 200..299) {
+                connection.disconnect()
+                return@runCatching null
+            }
+            val bytes = connection.inputStream.use { it.readBytes() }
+            connection.disconnect()
+            bytes.takeIf { it.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    fun importArtworkBytes(bytes: ByteArray, suggestedName: String = "cover.jpg"): String? {
+        if (bytes.isEmpty()) {
+            return null
+        }
+
+        val fileExtension = sanitizeExtension(suggestedName.substringAfterLast('.', "jpg"))
         val outputFile = File(
             artworkDir,
             "art_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.$fileExtension"
         )
 
-        val copied = downloadRemoteFile(
-            urlString = urlString,
-            outputFile = outputFile,
-            connectTimeoutMs = 15_000,
-            readTimeoutMs = 120_000
-        )
-        if (!copied || !outputFile.exists()) {
+        return try {
+            outputFile.outputStream().use { output ->
+                output.write(bytes)
+                output.flush()
+            }
+            outputFile.absolutePath
+        } catch (_: Exception) {
             if (outputFile.exists()) {
                 outputFile.delete()
             }
-            return null
+            null
         }
-        return outputFile.absolutePath
+    }
+
+    fun rewriteDownloadedMp3Metadata(
+        filePath: String,
+        preferredTitle: String,
+        preferredArtist: String,
+        preferredArtwork: ByteArray?
+    ): Boolean {
+        if (filePath.isBlank()) {
+            return false
+        }
+
+        val sourceFile = File(filePath)
+        if (!sourceFile.exists() || sourceFile.extension.lowercase() != "mp3") {
+            return false
+        }
+
+        val tempFile = File(
+            sourceFile.parentFile ?: musicDir,
+            "${sourceFile.nameWithoutExtension}_retag.${sourceFile.extension}"
+        )
+
+        return try {
+            val mp3File = Mp3File(sourceFile.absolutePath)
+            val tag = (mp3File.id3v2Tag as? ID3v24Tag) ?: ID3v24Tag()
+            if (preferredTitle.isNotBlank()) {
+                tag.title = preferredTitle
+            }
+            if (preferredArtist.isNotBlank()) {
+                tag.artist = preferredArtist
+            }
+            if (preferredArtwork != null && preferredArtwork.isNotEmpty()) {
+                tag.setAlbumImage(preferredArtwork, "image/jpeg")
+            }
+            mp3File.id3v2Tag = tag
+            mp3File.save(tempFile.absolutePath)
+            if (!sourceFile.delete()) {
+                tempFile.delete()
+                return false
+            }
+            if (!tempFile.renameTo(sourceFile)) {
+                tempFile.delete()
+                return false
+            }
+            true
+        } catch (_: Exception) {
+            if (tempFile.exists()) {
+                tempFile.delete()
+            }
+            false
+        }
     }
 
     fun deleteTrackFiles(track: TrackItem): Boolean {

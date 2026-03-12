@@ -13,7 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 private const val DEFAULT_BACKEND_BASE_URL = "https://api.corebrew.ru"
-private const val BACKEND_SEARCH_PATH = "/api/spotify/search"
+private const val BACKEND_SEARCH_PATH = "/api/search"
 private const val BACKEND_DOWNLOAD_PATH = "/api/download"
 private const val BACKEND_TOP_TRACKS_PATH_TEMPLATE = "/api/spotify/artists/%s/top-tracks"
 private const val INSTALL_UNAVAILABLE_MESSAGE = "Установка временно недоступна, попробуйте завтра."
@@ -54,6 +54,7 @@ class MiniStreamingClient(
     backendBaseUrl: String = DEFAULT_BACKEND_BASE_URL
 ) {
     private val normalizedBackendBaseUrl: String = normalizeBackendBaseUrl(backendBaseUrl)
+    var preferredSearchEngine: String = "spotify"
 
     @Volatile
     private var lastResolveFailureMessage: String = ""
@@ -89,6 +90,7 @@ class MiniStreamingClient(
             val requestUrl = buildBackendUrl(
                 path = BACKEND_SEARCH_PATH,
                 query = listOf(
+                    "engine" to normalizedSearchEngine(),
                     "q" to normalizedQuery,
                     "type" to "track",
                     "limit" to boundedLimit.toString()
@@ -112,6 +114,10 @@ class MiniStreamingClient(
     }
 
     suspend fun searchArtists(query: String, limit: Int = 10): List<MiniStreamingArtist> {
+        if (normalizedSearchEngine() != "spotify") {
+            artistsSectionEnabled = false
+            return emptyList()
+        }
         if (!isConfigured()) {
             return emptyList()
         }
@@ -163,6 +169,10 @@ class MiniStreamingClient(
     }
 
     suspend fun fetchTopTracksForArtist(artistId: String, limit: Int = 30): List<MiniStreamingTrack> {
+        if (normalizedSearchEngine() != "spotify") {
+            artistsSectionEnabled = false
+            return emptyList()
+        }
         if (!isConfigured()) {
             return emptyList()
         }
@@ -207,10 +217,16 @@ class MiniStreamingClient(
         }
 
         return withContext(Dispatchers.IO) {
-            val trackUrl = "https://open.spotify.com/track/$normalizedTrackId"
+            val engine = normalizedSearchEngine()
+            val trackUrl = if (engine == "spotify") {
+                "https://open.spotify.com/track/$normalizedTrackId"
+            } else {
+                ""
+            }
             val requestUrl = buildBackendUrl(
                 path = BACKEND_DOWNLOAD_PATH,
                 query = listOf(
+                    "engine" to engine,
                     "trackId" to normalizedTrackId,
                     "trackUrl" to trackUrl
                 )
@@ -369,6 +385,7 @@ class MiniStreamingClient(
         val normalizedPath = if (path.startsWith("/")) path else "/$path"
         val queryPart = query
             .filter { it.first.isNotBlank() }
+            .filter { it.second.isNotBlank() }
             .joinToString("&") { (key, value) ->
                 "${encodeQueryValue(key)}=${encodeQueryValue(value)}"
             }
@@ -491,7 +508,7 @@ class MiniStreamingClient(
             }.ifBlank {
                 node.optString("artistName").trim()
             }.ifBlank {
-                "Spotify"
+                if (normalizedSearchEngine() == "youtube") "YouTube" else "Spotify"
             },
             durationMs = parseDurationMsFromItem(node),
             artworkUrl = artwork
@@ -517,6 +534,7 @@ class MiniStreamingClient(
         val direct = node.optString("id").trim()
             .ifBlank { node.optString("trackId").trim() }
             .ifBlank { node.optString("spotifyTrackId").trim() }
+            .ifBlank { node.optString("videoId").trim() }
         if (direct.isNotBlank()) {
             return direct
         }
@@ -524,7 +542,10 @@ class MiniStreamingClient(
         if (fromUri.isNotBlank()) {
             return fromUri
         }
-        return parseTrackIdFromText(node.optJSONObject("external_urls")?.optString("spotify"))
+        return parseTrackIdFromText(
+            node.optJSONObject("external_urls")?.optString("spotify")
+                ?: node.optJSONObject("external_urls")?.optString("youtube")
+        )
     }
 
     private fun parseTrackIdFromText(raw: String?): String {
@@ -538,7 +559,22 @@ class MiniStreamingClient(
         Regex("/track/([A-Za-z0-9]{22})").find(text)?.let { match ->
             return match.groupValues.getOrNull(1).orEmpty()
         }
-        return if (Regex("^[A-Za-z0-9]{22}$").matches(text)) text else ""
+        Regex("[?&]v=([A-Za-z0-9_-]{11})").find(text)?.let { match ->
+            return match.groupValues.getOrNull(1).orEmpty()
+        }
+        Regex("youtu\\.be/([A-Za-z0-9_-]{11})").find(text)?.let { match ->
+            return match.groupValues.getOrNull(1).orEmpty()
+        }
+        return when {
+            Regex("^[A-Za-z0-9]{22}$").matches(text) -> text
+            Regex("^[A-Za-z0-9_-]{11}$").matches(text) -> text
+            else -> ""
+        }
+    }
+
+    private fun normalizedSearchEngine(): String {
+        return preferredSearchEngine.trim().lowercase()
+            .let { if (it == "youtube") "youtube" else "spotify" }
     }
 
     private fun parseDurationMsFromItem(node: JSONObject): Long {
