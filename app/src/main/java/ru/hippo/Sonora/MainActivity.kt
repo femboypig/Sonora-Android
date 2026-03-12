@@ -10523,6 +10523,11 @@ private fun PlayerView(
             val sliderActiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 1f else 0.45f)
             val sliderInactiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 0.26f else 0.12f)
             val controlsBottomPadding = 6.dp
+            val largeScreenBottomLift = when {
+                maxHeight >= 900.dp || maxWidth >= 680.dp -> 16.dp
+                maxHeight >= 820.dp || maxWidth >= 600.dp -> 10.dp
+                else -> 0.dp
+            }
             val sliderColors = SliderDefaults.colors(
                 thumbColor = sliderActiveColor,
                 activeTrackColor = sliderActiveColor,
@@ -10687,159 +10692,164 @@ private fun PlayerView(
                 Spacer(modifier = Modifier.height(16.dp))
                 Spacer(modifier = Modifier.weight(1f))
 
-                Text(
-                    text = nextPreviewText,
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = preferredFontFamily ?: MaterialTheme.typography.bodyMedium.fontFamily,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    color = secondaryColor,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(88.dp)
-                        .padding(start = 14.dp, end = 14.dp, bottom = controlsBottomPadding)
+                        .offset(y = -largeScreenBottomLift)
                 ) {
-                    Column(
-                        modifier = Modifier.align(Alignment.CenterStart),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        val repeatIcon = when (repeatMode) {
-                            RepeatMode.None,
-                            RepeatMode.Queue -> R.drawable.ic_player_repeat
-                            RepeatMode.Track -> R.drawable.ic_player_repeat_one
-                        }
-                        val repeatTint = if (repeatMode == RepeatMode.None) {
-                            primaryColor.copy(alpha = 0.92f)
-                        } else {
-                            accentColor
-                        }
-                        PlainControlButton(
-                            iconRes = repeatIcon,
-                            contentDescription = "Repeat",
-                            onClick = onCycleRepeat,
-                            enabled = hasQueue,
-                            size = 40.dp,
-                            iconSize = 24.dp,
-                            cornerRadius = playerButtonCornerRadius,
-                            tint = repeatTint
-                        )
-                        PlainControlButton(
-                            iconRes = R.drawable.ic_player_shuffle,
-                            contentDescription = "Shuffle",
-                            onClick = onToggleShuffle,
-                            enabled = hasQueue,
-                            size = 40.dp,
-                            iconSize = 24.dp,
-                            cornerRadius = playerButtonCornerRadius,
-                            tint = if (isShuffleEnabled) {
-                                accentColor
-                            } else {
-                                primaryColor.copy(alpha = 0.92f)
-                            }
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.align(Alignment.Center),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        PlainControlButton(
-                            iconRes = R.drawable.ic_global_previous,
-                            contentDescription = "Previous",
-                            onClick = onPrevious,
-                            enabled = canStep,
-                            size = 64.dp,
-                            iconSize = 44.dp,
-                            cornerRadius = playerButtonCornerRadius,
-                            tint = controlColor
-                        )
-                        PlainControlButton(
-                            iconRes = if (isPlayingVisual) R.drawable.ic_global_pause else R.drawable.ic_global_play,
-                            contentDescription = if (isPlayingVisual) "Pause" else "Play",
-                            onClick = onTogglePlayPause,
-                            enabled = hasQueue,
-                            size = 76.dp,
-                            iconSize = 56.dp,
-                            cornerRadius = playerButtonCornerRadius,
-                            tint = controlColor
-                        )
-                        PlainControlButton(
-                            iconRes = R.drawable.ic_global_next,
-                            contentDescription = "Next",
-                            onClick = onNext,
-                            enabled = canStep,
-                            size = 64.dp,
-                            iconSize = 44.dp,
-                            cornerRadius = playerButtonCornerRadius,
-                            tint = controlColor
-                        )
-                    }
-
-                    Column(
-                        modifier = Modifier.align(Alignment.CenterEnd),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        PlainControlButton(
-                            iconRes = if (isSleepTimerActive) R.drawable.sleep_fill else R.drawable.sleep,
-                            contentDescription = "Sleep timer",
-                            onClick = onSleepTimerTap,
-                            enabled = true,
-                            size = 40.dp,
-                            iconSize = 29.dp,
-                            iconWidth = 24.5.dp,
-                            iconHeight = 29.dp,
-                            cornerRadius = playerButtonCornerRadius,
-                            tint = if (isSleepTimerActive) {
-                                accentColor
-                            } else {
-                                primaryColor.copy(alpha = 0.92f)
-                            }
-                        )
-                        PlainControlButton(
-                            iconRes = if (isFavorite) R.drawable.heart_fill else R.drawable.heart,
-                            contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
-                            onClick = onToggleFavorite,
-                            enabled = true,
-                            size = 40.dp,
-                            iconSize = 24.dp,
-                            cornerRadius = playerButtonCornerRadius,
-                            tint = if (isFavorite) {
-                                Color(0xFFFF5966)
-                            } else {
-                                primaryColor.copy(alpha = 0.92f)
-                            }
-                        )
-                    }
-                }
-
-                if (isSleepTimerActive) {
                     Text(
-                        text = "Sleep: ${formatDuration(sleepTimerRemainingMs)}",
+                        text = nextPreviewText,
                         modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(bottom = controlsBottomPadding),
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
                         style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
+                            fontFamily = preferredFontFamily ?: MaterialTheme.typography.bodyMedium.fontFamily,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold
                         ),
-                        color = secondaryColor
+                        color = secondaryColor,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
-                } else {
-                    Spacer(modifier = Modifier.height(controlsBottomPadding))
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(88.dp)
+                            .padding(start = 14.dp, end = 14.dp, bottom = controlsBottomPadding)
+                    ) {
+                        Column(
+                            modifier = Modifier.align(Alignment.CenterStart),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            val repeatIcon = when (repeatMode) {
+                                RepeatMode.None,
+                                RepeatMode.Queue -> R.drawable.ic_player_repeat
+                                RepeatMode.Track -> R.drawable.ic_player_repeat_one
+                            }
+                            val repeatTint = if (repeatMode == RepeatMode.None) {
+                                primaryColor.copy(alpha = 0.92f)
+                            } else {
+                                accentColor
+                            }
+                            PlainControlButton(
+                                iconRes = repeatIcon,
+                                contentDescription = "Repeat",
+                                onClick = onCycleRepeat,
+                                enabled = hasQueue,
+                                size = 40.dp,
+                                iconSize = 24.dp,
+                                cornerRadius = playerButtonCornerRadius,
+                                tint = repeatTint
+                            )
+                            PlainControlButton(
+                                iconRes = R.drawable.ic_player_shuffle,
+                                contentDescription = "Shuffle",
+                                onClick = onToggleShuffle,
+                                enabled = hasQueue,
+                                size = 40.dp,
+                                iconSize = 24.dp,
+                                cornerRadius = playerButtonCornerRadius,
+                                tint = if (isShuffleEnabled) {
+                                    accentColor
+                                } else {
+                                    primaryColor.copy(alpha = 0.92f)
+                                }
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.align(Alignment.Center),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            PlainControlButton(
+                                iconRes = R.drawable.ic_global_previous,
+                                contentDescription = "Previous",
+                                onClick = onPrevious,
+                                enabled = canStep,
+                                size = 64.dp,
+                                iconSize = 44.dp,
+                                cornerRadius = playerButtonCornerRadius,
+                                tint = controlColor
+                            )
+                            PlainControlButton(
+                                iconRes = if (isPlayingVisual) R.drawable.ic_global_pause else R.drawable.ic_global_play,
+                                contentDescription = if (isPlayingVisual) "Pause" else "Play",
+                                onClick = onTogglePlayPause,
+                                enabled = hasQueue,
+                                size = 76.dp,
+                                iconSize = 56.dp,
+                                cornerRadius = playerButtonCornerRadius,
+                                tint = controlColor
+                            )
+                            PlainControlButton(
+                                iconRes = R.drawable.ic_global_next,
+                                contentDescription = "Next",
+                                onClick = onNext,
+                                enabled = canStep,
+                                size = 64.dp,
+                                iconSize = 44.dp,
+                                cornerRadius = playerButtonCornerRadius,
+                                tint = controlColor
+                            )
+                        }
+
+                        Column(
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            PlainControlButton(
+                                iconRes = if (isSleepTimerActive) R.drawable.sleep_fill else R.drawable.sleep,
+                                contentDescription = "Sleep timer",
+                                onClick = onSleepTimerTap,
+                                enabled = true,
+                                size = 40.dp,
+                                iconSize = 29.dp,
+                                iconWidth = 24.5.dp,
+                                iconHeight = 29.dp,
+                                cornerRadius = playerButtonCornerRadius,
+                                tint = if (isSleepTimerActive) {
+                                    accentColor
+                                } else {
+                                    primaryColor.copy(alpha = 0.92f)
+                                }
+                            )
+                            PlainControlButton(
+                                iconRes = if (isFavorite) R.drawable.heart_fill else R.drawable.heart,
+                                contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+                                onClick = onToggleFavorite,
+                                enabled = true,
+                                size = 40.dp,
+                                iconSize = 24.dp,
+                                cornerRadius = playerButtonCornerRadius,
+                                tint = if (isFavorite) {
+                                    Color(0xFFFF5966)
+                                } else {
+                                    primaryColor.copy(alpha = 0.92f)
+                                }
+                            )
+                        }
+                    }
+
+                    if (isSleepTimerActive) {
+                        Text(
+                            text = "Sleep: ${formatDuration(sleepTimerRemainingMs)}",
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(bottom = controlsBottomPadding),
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = secondaryColor
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(controlsBottomPadding))
+                    }
                 }
             }
         }
