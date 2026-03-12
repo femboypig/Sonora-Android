@@ -6234,8 +6234,20 @@ private fun HomeMyWaveCard(
                     .matchParentSize()
                     .padding(horizontal = 8.dp, vertical = 18.dp)
             ) {
+                val trackSeedTarget = remember(track.id) {
+                    ((((track.id.hashCode().toLong() and 0xffffffffL) % 1000L).toFloat()) / 1000f).coerceIn(0f, 1f)
+                }
+                val trackSeed by animateFloatAsState(
+                    targetValue = trackSeedTarget,
+                    animationSpec = tween(
+                        durationMillis = if (isPlaying) 1020 else 1160,
+                        easing = androidx.compose.animation.core.FastOutSlowInEasing
+                    ),
+                    label = "wave_track_seed"
+                )
                 MyWaveContoursBackground(
                     colors = listOf(c0, c1, c2, c3),
+                    trackSeed = trackSeed,
                     phaseA = phaseA,
                     phaseB = phaseB,
                     breathe = breathe,
@@ -6381,6 +6393,7 @@ private fun MyWaveCloudsBackground(
 @Composable
 private fun MyWaveContoursBackground(
     colors: List<Color>,
+    trackSeed: Float,
     phaseA: Float,
     phaseB: Float,
     breathe: Float,
@@ -6419,7 +6432,7 @@ private fun MyWaveContoursBackground(
     Canvas(modifier = modifier) {
         val tau = (Math.PI * 2.0).toFloat()
         val motion = if (isPlaying) 1.0f else 0.66f
-        val seedPhase = (colorSeed * tau) + (phaseA * tau * 0.014f) + (phaseB * tau * 0.010f)
+        val seedPhase = (trackSeed * tau) + (colorSeed * tau * 0.18f) + (phaseA * tau * 0.014f) + (phaseB * tau * 0.010f)
         val t = contourClock
         val driverA = sin(((t * 0.24f) + seedPhase).toDouble()).toFloat()
         val driverB = cos(((t * 0.17f) - (seedPhase * 0.33f)).toDouble()).toFloat()
