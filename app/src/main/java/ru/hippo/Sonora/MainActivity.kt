@@ -4153,6 +4153,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                         track = activeMiniTrack,
                         hasQueue = playerHasQueue,
                         isPlaying = playbackController.isPlaying,
+                        isPlayingVisual = playbackController.visualIsPlaying,
                         canStep = playerCanStep,
                         onOpen = { playerVisible = true },
                         onTogglePlayPause = { playbackController.togglePlayPause() },
@@ -4171,6 +4172,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                         track = playerTrack,
                         hasQueue = playerHasQueue,
                         isPlaying = playbackController.isPlaying,
+                        isPlayingVisual = playbackController.visualIsPlaying,
                         canStep = playerCanStep,
                     isFavorite = isFavorite,
                     isShuffleEnabled = playbackController.isShuffleEnabled,
@@ -10270,6 +10272,7 @@ private fun MiniPlayer(
     track: TrackItem,
     hasQueue: Boolean,
     isPlaying: Boolean,
+    isPlayingVisual: Boolean,
     canStep: Boolean,
     onOpen: () -> Unit,
     onTogglePlayPause: () -> Unit,
@@ -10405,8 +10408,8 @@ private fun MiniPlayer(
                 Spacer(modifier = Modifier.width(1.dp))
 
                 PlainControlButton(
-                    iconRes = if (isPlaying) R.drawable.ic_global_pause else R.drawable.ic_global_play,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
+                    iconRes = if (isPlayingVisual) R.drawable.ic_global_pause else R.drawable.ic_global_play,
+                    contentDescription = if (isPlayingVisual) "Pause" else "Play",
                     onClick = onTogglePlayPause,
                     enabled = hasQueue,
                     size = 34.dp,
@@ -10437,6 +10440,7 @@ private fun PlayerView(
     track: TrackItem,
     hasQueue: Boolean,
     isPlaying: Boolean,
+    isPlayingVisual: Boolean,
     canStep: Boolean,
     isFavorite: Boolean,
     isShuffleEnabled: Boolean,
@@ -10763,8 +10767,8 @@ private fun PlayerView(
                             tint = controlColor
                         )
                         PlainControlButton(
-                            iconRes = if (isPlaying) R.drawable.ic_global_pause else R.drawable.ic_global_play,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            iconRes = if (isPlayingVisual) R.drawable.ic_global_pause else R.drawable.ic_global_play,
+                            contentDescription = if (isPlayingVisual) "Pause" else "Play",
                             onClick = onTogglePlayPause,
                             enabled = hasQueue,
                             size = 76.dp,

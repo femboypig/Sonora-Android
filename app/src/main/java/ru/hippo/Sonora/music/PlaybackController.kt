@@ -75,6 +75,9 @@ class PlaybackController(
     var isPreparing: Boolean by mutableStateOf(false)
         private set
 
+    val visualIsPlaying: Boolean
+        get() = isPlaying || (isPreparing && pendingPlayWhenPrepared && (currentTrackId != null || pendingTrackId != null))
+
     var queueCount: Int by mutableIntStateOf(0)
         private set
 
@@ -96,21 +99,31 @@ class PlaybackController(
     val currentTrack: TrackItem?
         get() = queue.getOrNull(currentIndex)
 
+    private val pendingTrack: TrackItem?
+        get() {
+            val targetId = pendingTrackId
+            if (!targetId.isNullOrBlank()) {
+                queue.firstOrNull { it.id == targetId }?.let { return it }
+            }
+            return queue.getOrNull(pendingTrackIndex)
+        }
+
     val displayTrack: TrackItem?
         get() {
             if (!isPreparing) {
                 return currentTrack
             }
+            currentTrack?.let { return it }
             val stableTrackId = lastPreparedTrackState?.trackId
             if (!stableTrackId.isNullOrBlank()) {
                 queue.firstOrNull { it.id == stableTrackId }?.let { return it }
                 lastPreparedTrackState?.queue?.firstOrNull { it.id == stableTrackId }?.let { return it }
             }
-            return currentTrack
+            return pendingTrack
         }
 
     val displayTrackId: String?
-        get() = displayTrack?.id ?: currentTrackId
+        get() = displayTrack?.id ?: pendingTrackId ?: currentTrackId
 
     private val appContext = context.applicationContext
     private val notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -136,6 +149,9 @@ class PlaybackController(
     private var playerPrepared: Boolean = false
     private var pendingPlayWhenPrepared: Boolean = false
     private var lastPreparedTrackState: SkipRollbackState? = null
+    private var pendingTrackIndex: Int = -1
+    private var pendingTrackId: String? = null
+    private var pendingSkippedTrackId: String? = null
     private var pendingSkipRollback: SkipRollbackState? = null
 
     private fun clearPendingSeekHold() {
@@ -191,6 +207,13 @@ class PlaybackController(
     fun currentPositionMs(): Long {
         val mediaPlayerRef = mediaPlayer
         val exoPlayerRef = exoPlayer
+        if (mediaPlayerRef == null && exoPlayerRef == null && isPreparing) {
+            val pendingSeek = pendingSeekPositionMs
+            if (pendingSeek >= 0L) {
+                return pendingSeek
+            }
+            lastPreparedTrackState?.positionMs?.coerceAtLeast(0L)?.let { return it }
+        }
         val position = when {
             exoPlayerRef != null -> exoPlayerRef.currentPosition.coerceAtLeast(0L)
             else -> (mediaPlayerRef?.currentPosition ?: 0).toLong().coerceAtLeast(0L)
@@ -217,7 +240,7 @@ class PlaybackController(
         if (playerDuration > 0L) {
             return playerDuration
         }
-        return currentTrack?.durationMs ?: 0L
+        return displayTrack?.durationMs ?: 0L
     }
 
     fun seekTo(positionMs: Long) {
@@ -286,9 +309,11 @@ class PlaybackController(
         this.queue = queue
         queueCount = queue.size
         resetShuffleState()
-        playAt(index)
-        if (!skippedTrackId.isNullOrBlank()) {
-            onTrackSkipped(skippedTrackId)
+        val started = playAt(index)
+        if (started) {
+            stagePendingSkippedTrack(skippedTrackId, targetTrackId)
+        } else {
+            clearPendingSkippedTrack()
         }
     }
 
@@ -313,6 +338,12 @@ class PlaybackController(
         queue = updatedQueue
         queueCount = updatedQueue.size
         currentIndex = nextIndex
+        if (!pendingTrackId.isNullOrBlank()) {
+            pendingTrackIndex = updatedQueue.indexOfFirst { it.id == pendingTrackId }
+            if (pendingTrackIndex < 0) {
+                clearPendingTrackTarget()
+            }
+        }
         resetShuffleState()
         updateExternalState()
     }
@@ -373,7 +404,7 @@ class PlaybackController(
         cancelPendingAutoNext()
         val exoPlayerRef = exoPlayer
         val mediaPlayerRef = mediaPlayer
-        if (exoPlayerRef == null && mediaPlayerRef == null) {
+        if (exoPlayerRef == null && mediaPlayerRef == null && !isPreparing) {
             return
         }
         if (!playerPrepared) {
@@ -452,9 +483,9 @@ class PlaybackController(
         val advanced = playNextInternal(automatic = false)
         if (!advanced) {
             pendingSkipRollback = null
-        }
-        if (!skippedTrackId.isNullOrBlank() && currentTrackId != skippedTrackId) {
-            onTrackSkipped(skippedTrackId)
+            clearPendingSkippedTrack()
+        } else {
+            stagePendingSkippedTrack(skippedTrackId, pendingTrackId ?: currentTrackId)
         }
         return advanced
     }
@@ -466,9 +497,9 @@ class PlaybackController(
         val rewound = playPreviousInternal()
         if (!rewound) {
             pendingSkipRollback = null
-        }
-        if (!skippedTrackId.isNullOrBlank() && currentTrackId != skippedTrackId) {
-            onTrackSkipped(skippedTrackId)
+            clearPendingSkippedTrack()
+        } else {
+            stagePendingSkippedTrack(skippedTrackId, pendingTrackId ?: currentTrackId)
         }
         return rewound
     }
@@ -485,6 +516,8 @@ class PlaybackController(
     fun stop() {
         lastPreparedTrackState = null
         pendingSkipRollback = null
+        clearPendingTrackTarget()
+        clearPendingSkippedTrack()
         cancelPendingAutoNext()
         stopPlayer()
         queue = emptyList()
@@ -578,7 +611,7 @@ class PlaybackController(
             return null
         }
 
-        val navigationIndex = navigationAnchorIndex()
+        val navigationIndex = previewAnchorIndex()
         if (navigationIndex < 0) {
             return 0
         }
@@ -706,14 +739,16 @@ class PlaybackController(
         playRequestToken += 1L
         val requestToken = playRequestToken
         stopPlayer()
-        currentIndex = index
-        currentTrackId = track.id
+        pendingTrackIndex = index
+        pendingTrackId = track.id
         playerPrepared = false
         pendingPlayWhenPrepared = shouldAutoPlay
         isPreparing = true
-        isPlaying = false
+        if (!shouldAutoPlay) {
+            isPlaying = false
+        }
         if (isShuffleEnabled && queue.size > 1) {
-            refillShuffleBag(excluding = currentIndex)
+            refillShuffleBag(excluding = index)
         }
         updateExternalState()
 
@@ -738,6 +773,8 @@ class PlaybackController(
                 if (restorePendingSkipRollback()) {
                     return true
                 }
+                clearPendingTrackTarget()
+                clearPendingSkippedTrack()
                 playerPrepared = false
                 pendingPlayWhenPrepared = false
                 isPreparing = false
@@ -763,14 +800,16 @@ class PlaybackController(
                     }
                     when (playbackState) {
                         Player.STATE_READY -> {
-                            playerPrepared = true
-                            isPreparing = false
                             if (!readyHandled) {
                                 readyHandled = true
+                                commitPreparedTrack(index, track.id)
+                                playerPrepared = true
+                                isPreparing = false
                                 val pendingSeek = pendingSeekPositionMs
                                 if (pendingSeek >= 0L && remotePlayer.duration > 0L) {
                                     remotePlayer.seekTo(pendingSeek.coerceIn(0L, remotePlayer.duration))
                                 }
+                                dispatchPendingSkippedTrack(currentTrackId)
                                 if (pendingPlayWhenPrepared) {
                                     remotePlayer.playWhenReady = true
                                     this@PlaybackController.isPlaying = true
@@ -794,6 +833,10 @@ class PlaybackController(
 
                 override fun onIsPlayingChanged(isPlayingNow: Boolean) {
                     if (playRequestToken == requestToken && exoPlayer === remotePlayer) {
+                        if (isPreparing && pendingPlayWhenPrepared && !isPlayingNow) {
+                            updateExternalState()
+                            return
+                        }
                         this@PlaybackController.isPlaying = isPlayingNow
                         updateExternalState()
                     }
@@ -804,7 +847,9 @@ class PlaybackController(
                         if (restorePendingSkipRollback()) {
                             return
                         }
-                        val failedTrackId = currentTrackId
+                        val failedTrackId = pendingTrackId ?: currentTrackId
+                        clearPendingTrackTarget()
+                        clearPendingSkippedTrack()
                         playerPrepared = false
                         pendingPlayWhenPrepared = false
                         isPreparing = false
@@ -837,12 +882,14 @@ class PlaybackController(
                         runCatching { preparedPlayer.release() }
                         return@setOnPreparedListener
                     }
+                    commitPreparedTrack(index, track.id)
                     playerPrepared = true
                     isPreparing = false
                     val pendingSeek = pendingSeekPositionMs
                     if (pendingSeek >= 0L && preparedPlayer.duration > 0) {
                         preparedPlayer.seekTo(pendingSeek.coerceIn(0L, preparedPlayer.duration.toLong()).toInt())
                     }
+                    dispatchPendingSkippedTrack(currentTrackId)
                     if (pendingPlayWhenPrepared) {
                         preparedPlayer.start()
                         this@PlaybackController.isPlaying = true
@@ -868,7 +915,9 @@ class PlaybackController(
                         if (restorePendingSkipRollback()) {
                             return@setOnErrorListener true
                         }
-                        val failedTrackId = currentTrackId
+                        val failedTrackId = pendingTrackId ?: currentTrackId
+                        clearPendingTrackTarget()
+                        clearPendingSkippedTrack()
                         playerPrepared = false
                         pendingPlayWhenPrepared = false
                         isPreparing = false
@@ -894,6 +943,8 @@ class PlaybackController(
             if (restorePendingSkipRollback()) {
                 return true
             }
+            clearPendingTrackTarget()
+            clearPendingSkippedTrack()
             playerPrepared = false
             pendingPlayWhenPrepared = false
             isPreparing = false
@@ -945,6 +996,8 @@ class PlaybackController(
     private fun stopAtQueueEnd() {
         lastPreparedTrackState = null
         pendingSkipRollback = null
+        clearPendingTrackTarget()
+        clearPendingSkippedTrack()
         cancelPendingAutoNext()
         stopPlayer()
         isPlaying = false
@@ -998,6 +1051,9 @@ class PlaybackController(
     }
 
     private fun navigationAnchorIndex(): Int {
+        if (pendingTrackIndex in queue.indices) {
+            return pendingTrackIndex
+        }
         if (isPreparing) {
             val stable = lastPreparedTrackState
             if (stable != null && stable.index in queue.indices && queue.getOrNull(stable.index)?.id == stable.trackId) {
@@ -1007,9 +1063,22 @@ class PlaybackController(
         return currentIndex
     }
 
+    private fun previewAnchorIndex(): Int {
+        if (currentIndex in queue.indices) {
+            return currentIndex
+        }
+        val stable = lastPreparedTrackState
+        if (stable != null && stable.index in queue.indices && queue.getOrNull(stable.index)?.id == stable.trackId) {
+            return stable.index
+        }
+        return pendingTrackIndex
+    }
+
     private fun restorePendingSkipRollback(): Boolean {
         val rollback = pendingSkipRollback ?: return false
         pendingSkipRollback = null
+        clearPendingTrackTarget()
+        clearPendingSkippedTrack()
         if (rollback.index !in rollback.queue.indices || rollback.queue[rollback.index].id != rollback.trackId) {
             return false
         }
@@ -1033,6 +1102,36 @@ class PlaybackController(
             }
         }
         return true
+    }
+
+    private fun clearPendingTrackTarget() {
+        pendingTrackIndex = -1
+        pendingTrackId = null
+    }
+
+    private fun clearPendingSkippedTrack() {
+        pendingSkippedTrackId = null
+    }
+
+    private fun stagePendingSkippedTrack(skippedTrackId: String?, targetTrackId: String?) {
+        pendingSkippedTrackId = skippedTrackId?.takeIf { it.isNotBlank() && it != targetTrackId }
+    }
+
+    private fun dispatchPendingSkippedTrack(activeTrackId: String?) {
+        val skippedTrackId = pendingSkippedTrackId
+            ?.takeIf { it.isNotBlank() && it != activeTrackId }
+            ?: run {
+                pendingSkippedTrackId = null
+                return
+            }
+        pendingSkippedTrackId = null
+        onTrackSkipped(skippedTrackId)
+    }
+
+    private fun commitPreparedTrack(index: Int, trackId: String) {
+        currentIndex = index
+        currentTrackId = trackId
+        clearPendingTrackTarget()
     }
 
     private fun updateExternalState() {
