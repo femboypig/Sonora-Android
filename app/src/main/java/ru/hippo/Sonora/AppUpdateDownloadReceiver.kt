@@ -19,7 +19,7 @@ private const val APP_UPDATE_NOTIFICATION_ID = 2042
 
 internal fun showAndroidAppUpdateReadyNotification(
     context: Context,
-    snapshot: AndroidAppUpdateDownloadSnapshot
+    release: AndroidAppUpdateRelease
 ): Boolean {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -52,7 +52,7 @@ internal fun showAndroidAppUpdateReadyNotification(
 
     val notification = NotificationCompat.Builder(context, APP_UPDATE_NOTIFICATION_CHANNEL_ID)
         .setSmallIcon(R.mipmap.ic_launcher)
-        .setContentTitle("Sonora ${snapshot.release.versionName} downloaded")
+        .setContentTitle("Sonora ${release.versionName} downloaded")
         .setContentText("Return to Sonora to continue installation.")
         .setAutoCancel(true)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -64,6 +64,11 @@ internal fun showAndroidAppUpdateReadyNotification(
     return true
 }
 
+internal fun showAndroidAppUpdateReadyNotification(
+    context: Context,
+    snapshot: AndroidAppUpdateDownloadSnapshot
+): Boolean = showAndroidAppUpdateReadyNotification(context, snapshot.release)
+
 class AppUpdateDownloadReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
@@ -73,10 +78,14 @@ class AppUpdateDownloadReceiver : BroadcastReceiver() {
         if (completedDownloadId <= 0L) {
             return
         }
-        val snapshot = readAndroidAppUpdateDownloadSnapshot(context, completedDownloadId) ?: return
-        if (snapshot.status != DownloadManager.STATUS_SUCCESSFUL) {
+        val storedRelease = readStoredAndroidAppUpdateRelease(context, completedDownloadId)
+        if (storedRelease != null) {
+            showAndroidAppUpdateReadyNotification(context, storedRelease)
             return
         }
-        showAndroidAppUpdateReadyNotification(context, snapshot)
+        val snapshot = readAndroidAppUpdateDownloadSnapshot(context, completedDownloadId) ?: return
+        if (snapshot.status == DownloadManager.STATUS_SUCCESSFUL) {
+            showAndroidAppUpdateReadyNotification(context, snapshot)
+        }
     }
 }

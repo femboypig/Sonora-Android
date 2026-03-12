@@ -12063,6 +12063,50 @@ fun readAndroidAppUpdateDownloadSnapshot(
     }
 }
 
+internal fun readStoredAndroidAppUpdateRelease(
+    context: Context,
+    requestedDownloadId: Long? = null
+): AndroidAppUpdateRelease? {
+    val prefs = appUpdateDownloadPrefs(context)
+    val storedDownloadId = prefs.getLong(APP_UPDATE_DOWNLOAD_ID_KEY, -1L).takeIf { it > 0L } ?: return null
+    if (requestedDownloadId != null && requestedDownloadId > 0L && requestedDownloadId != storedDownloadId) {
+        return null
+    }
+    val id = prefs.getString(APP_UPDATE_RELEASE_ID_KEY, null).orEmpty().trim()
+    val title = prefs.getString(APP_UPDATE_RELEASE_TITLE_KEY, null).orEmpty().trim()
+    val versionName = prefs.getString(APP_UPDATE_RELEASE_VERSION_NAME_KEY, null).orEmpty().trim()
+    val versionCode = prefs.getLong(APP_UPDATE_RELEASE_VERSION_CODE_KEY, 0L)
+    val downloadUrl = prefs.getString(APP_UPDATE_RELEASE_DOWNLOAD_URL_KEY, null).orEmpty().trim()
+    if (id.isBlank() || title.isBlank() || versionName.isBlank() || versionCode <= 0L || downloadUrl.isBlank()) {
+        return null
+    }
+    val notes = runCatching {
+        val raw = prefs.getString(APP_UPDATE_RELEASE_NOTES_KEY, null).orEmpty()
+        if (raw.isBlank()) {
+            emptyList()
+        } else {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val value = array.optString(index).trim()
+                    if (value.isNotBlank()) {
+                        add(value)
+                    }
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
+    return AndroidAppUpdateRelease(
+        id = id,
+        title = title,
+        versionName = versionName,
+        versionCode = versionCode,
+        coverUrl = prefs.getString(APP_UPDATE_RELEASE_COVER_URL_KEY, null),
+        downloadUrl = downloadUrl,
+        notes = notes
+    )
+}
+
 private fun installDownloadedApk(context: Context, apkFile: File): Boolean {
     return runCatching {
         if (!apkFile.exists()) {
