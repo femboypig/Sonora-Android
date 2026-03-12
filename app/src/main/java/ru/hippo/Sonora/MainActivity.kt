@@ -116,6 +116,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -6415,13 +6416,15 @@ private fun MyWaveContoursBackground(
     val ringCount = 7
     var contourClock by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(isPlaying, colorSeed) {
+    val playingState by rememberUpdatedState(isPlaying)
+
+    LaunchedEffect(Unit) {
         var lastFrameNanos = 0L
         while (true) {
             withFrameNanos { frameNanos ->
                 if (lastFrameNanos != 0L) {
                     val deltaSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
-                    val speed = if (isPlaying) 1.06f else 0.44f
+                    val speed = if (playingState) 1.06f else 0.44f
                     contourClock += deltaSeconds * speed
                 }
                 lastFrameNanos = frameNanos
@@ -6432,7 +6435,7 @@ private fun MyWaveContoursBackground(
     Canvas(modifier = modifier) {
         val tau = (Math.PI * 2.0).toFloat()
         val motion = if (isPlaying) 1.0f else 0.66f
-        val seedPhase = (trackSeed * tau) + (colorSeed * tau * 0.18f) + (phaseA * tau * 0.014f) + (phaseB * tau * 0.010f)
+        val seedPhase = (trackSeed * tau) + (colorSeed * tau * 0.18f)
         val t = contourClock
         val driverA = sin(((t * 0.24f) + seedPhase).toDouble()).toFloat()
         val driverB = cos(((t * 0.17f) - (seedPhase * 0.33f)).toDouble()).toFloat()
