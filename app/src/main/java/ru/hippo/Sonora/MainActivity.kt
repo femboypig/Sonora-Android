@@ -6641,9 +6641,10 @@ private fun MyWaveContoursBackground(
             brush = Brush.radialGradient(
                 colorStops = arrayOf(
                     0.0f to Color.White.copy(alpha = 0.0f),
-                    0.16f to Color.White.copy(alpha = 0.88f),
-                    0.46f to Color.White.copy(alpha = 1.0f),
-                    0.82f to Color.White.copy(alpha = 0.72f),
+                    0.14f to Color.White.copy(alpha = 0.82f),
+                    0.40f to Color.White.copy(alpha = 1.0f),
+                    0.72f to Color.White.copy(alpha = 0.96f),
+                    0.88f to Color.White.copy(alpha = 0.54f),
                     1.0f to Color.White.copy(alpha = 0.0f)
                 ),
                 center = coreCenter,
@@ -6655,13 +6656,29 @@ private fun MyWaveContoursBackground(
             brush = Brush.verticalGradient(
                 colorStops = arrayOf(
                     0.0f to Color.White.copy(alpha = 0.0f),
-                    0.14f to Color.White.copy(alpha = 0.86f),
-                    0.24f to Color.White.copy(alpha = 1.0f),
-                    0.92f to Color.White.copy(alpha = 1.0f),
+                    0.10f to Color.White.copy(alpha = 0.74f),
+                    0.20f to Color.White.copy(alpha = 1.0f),
+                    0.88f to Color.White.copy(alpha = 1.0f),
+                    0.94f to Color.White.copy(alpha = 0.74f),
                     1.0f to Color.White.copy(alpha = 0.0f)
                 ),
                 startY = 0f,
                 endY = height
+            ),
+            blendMode = BlendMode.DstIn
+        )
+        drawRect(
+            brush = Brush.horizontalGradient(
+                colorStops = arrayOf(
+                    0.0f to Color.White.copy(alpha = 0.0f),
+                    0.06f to Color.White.copy(alpha = 0.74f),
+                    0.14f to Color.White.copy(alpha = 1.0f),
+                    0.86f to Color.White.copy(alpha = 1.0f),
+                    0.94f to Color.White.copy(alpha = 0.74f),
+                    1.0f to Color.White.copy(alpha = 0.0f)
+                ),
+                startX = 0f,
+                endX = width
             ),
             blendMode = BlendMode.DstIn
         )
