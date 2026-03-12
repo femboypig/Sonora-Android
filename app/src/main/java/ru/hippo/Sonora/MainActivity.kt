@@ -754,6 +754,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         mutableStateOf<Map<String, MiniStreamingDownloadPayload>>(emptyMap())
     }
     var miniStreamingPendingTrack by remember { mutableStateOf<TrackItem?>(null) }
+    var miniStreamingPlaybackFailedTrackId by remember { mutableStateOf<String?>(null) }
     var openedMiniStreamingArtist by remember { mutableStateOf<MiniStreamingArtist?>(null) }
     var openedMiniStreamingArtistTracks by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
     var openedMiniStreamingArtistLoading by remember { mutableStateOf(false) }
@@ -930,53 +931,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 }
             },
             onTrackPlaybackFailed = { trackID ->
-                val normalizedPlaybackId = trackID.trim()
-                val miniTrackId = when {
-                    normalizedPlaybackId.startsWith(MINI_STREAMING_PLAYBACK_PREFIX) -> {
-                        normalizedPlaybackId.removePrefix(MINI_STREAMING_PLAYBACK_PREFIX).trim().ifBlank { null }
-                    }
-                    normalizedPlaybackId.isNotBlank() -> {
-                        miniStreamingInstalledTrackMap.entries.firstOrNull { it.value == normalizedPlaybackId }?.key
-                    }
-                    else -> null
-                }
-                if (!miniTrackId.isNullOrBlank()) {
-                    val queueTrack = miniStreamingPlaybackQueue.firstOrNull { it.trackId == miniTrackId }
-                    if (queueTrack != null) {
-                        val payload = miniStreamingResolvedPayloadByTrackId[miniTrackId]
-                        miniStreamingPendingTrack = TrackItem(
-                            id = miniStreamingPlaybackIdForTrack(miniTrackId),
-                            title = queueTrack.title.ifBlank { payload?.title?.ifBlank { "Track" } ?: "Track" },
-                            artist = queueTrack.artists.ifBlank { payload?.artist?.ifBlank { "Spotify" } ?: "Spotify" },
-                            durationMs = when {
-                                queueTrack.durationMs > 0L -> queueTrack.durationMs
-                                payload != null && payload.durationMs > 0L -> payload.durationMs
-                                else -> 0L
-                            },
-                            filePath = "",
-                            artworkPath = queueTrack.artworkUrl.ifBlank { payload?.artworkUrl.orEmpty() },
-                            addedAt = System.currentTimeMillis(),
-                            isFavorite = false
-                        )
-                    }
-                    miniStreamingActiveTrackId = miniTrackId
-                    playerVisible = true
-                    if (!miniStreamingInstallingTrackIds.contains(miniTrackId) &&
-                        miniStreamingInstallingJobs[miniTrackId] == null &&
-                        queueTrack != null
-                    ) {
-                        val payload = miniStreamingResolvedPayloadByTrackId[miniTrackId]
-                        if (payload != null) {
-                            launchMiniStreamingInstall(
-                                track = queueTrack,
-                                initialPayload = payload,
-                                showErrorMessage = false
-                            )
-                        } else {
-                            launchMiniStreamingResolve(queueTrack)
-                        }
-                    }
-                }
+                miniStreamingPlaybackFailedTrackId = trackID
             }
         )
     }
@@ -2421,6 +2376,65 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 }
             }
         )
+    }
+
+    LaunchedEffect(
+        miniStreamingPlaybackFailedTrackId,
+        miniStreamingPlaybackQueue,
+        miniStreamingResolvedPayloadByTrackId,
+        miniStreamingInstalledTrackMap,
+        miniStreamingInstallingTrackIds
+    ) {
+        val failedPlaybackId = miniStreamingPlaybackFailedTrackId?.trim().orEmpty()
+        if (failedPlaybackId.isBlank()) {
+            return@LaunchedEffect
+        }
+        val miniTrackId = when {
+            failedPlaybackId.startsWith(MINI_STREAMING_PLAYBACK_PREFIX) -> {
+                failedPlaybackId.removePrefix(MINI_STREAMING_PLAYBACK_PREFIX).trim().ifBlank { null }
+            }
+            else -> {
+                miniStreamingInstalledTrackMap.entries.firstOrNull { it.value == failedPlaybackId }?.key
+            }
+        }
+        if (miniTrackId.isNullOrBlank()) {
+            miniStreamingPlaybackFailedTrackId = null
+            return@LaunchedEffect
+        }
+        val queueTrack = miniStreamingPlaybackQueue.firstOrNull { it.trackId == miniTrackId }
+        val payload = miniStreamingResolvedPayloadByTrackId[miniTrackId]
+        if (queueTrack != null) {
+            miniStreamingPendingTrack = TrackItem(
+                id = miniStreamingPlaybackIdForTrack(miniTrackId),
+                title = queueTrack.title.ifBlank { payload?.title?.ifBlank { "Track" } ?: "Track" },
+                artist = queueTrack.artists.ifBlank { payload?.artist?.ifBlank { "Spotify" } ?: "Spotify" },
+                durationMs = when {
+                    queueTrack.durationMs > 0L -> queueTrack.durationMs
+                    payload != null && payload.durationMs > 0L -> payload.durationMs
+                    else -> 0L
+                },
+                filePath = "",
+                artworkPath = queueTrack.artworkUrl.ifBlank { payload?.artworkUrl.orEmpty() },
+                addedAt = System.currentTimeMillis(),
+                isFavorite = false
+            )
+            miniStreamingActiveTrackId = miniTrackId
+            playerVisible = true
+            if (!miniStreamingInstallingTrackIds.contains(miniTrackId) &&
+                miniStreamingInstallingJobs[miniTrackId] == null
+            ) {
+                if (payload != null) {
+                    launchMiniStreamingInstall(
+                        track = queueTrack,
+                        initialPayload = payload,
+                        showErrorMessage = false
+                    )
+                } else {
+                    launchMiniStreamingResolve(queueTrack)
+                }
+            }
+        }
+        miniStreamingPlaybackFailedTrackId = null
     }
 
     LaunchedEffect(
