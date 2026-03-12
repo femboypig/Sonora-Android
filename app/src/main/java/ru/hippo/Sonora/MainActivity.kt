@@ -14,6 +14,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.activity.ComponentActivity
@@ -100,6 +101,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
@@ -537,6 +539,7 @@ private const val MINI_STREAMING_SEARCH_DEBOUNCE_MS = 280L
 private const val MINI_STREAMING_TRACKS_SEARCH_LIMIT = 8
 private const val MINI_STREAMING_ARTISTS_SEARCH_LIMIT = 10
 private const val MINI_STREAMING_ARTIST_PAGE_SIZE = 60
+private val MyWaveAnimationEpochNanos = SystemClock.elapsedRealtimeNanos()
 private val TrackGapSecondsOptions = listOf(0f, 0.5f, 1f, 1.5f, 2f, 3f, 5f, 8f)
 private val MaxStorageMbOptions = listOf(-1, 512, 1024, 2048, 3072, 4096, 6144, 8192)
 
@@ -6161,112 +6164,28 @@ private fun HomeMyWaveCard(
     onPlayToggle: () -> Unit
 ) {
     val lightTheme = !androidx.compose.foundation.isSystemInDarkTheme()
-    val paletteCacheKey = remember(track.id, track.artworkPath, track.filePath) {
-        wavePaletteCacheKey(track)
-    }
-    val paletteTarget by produceState(
-        initialValue = paletteCacheKey?.let { wavePaletteCacheGet(it) } ?: defaultWavePalette(),
-        key1 = paletteCacheKey
-    ) {
-        val key = paletteCacheKey ?: run {
-            value = defaultWavePalette()
-            return@produceState
-        }
-        wavePaletteCacheGet(key)?.let { cached ->
-            value = cached
-            return@produceState
-        }
-        val resolved = withContext(Dispatchers.IO) {
-            buildWavePaletteForTrack(track)
-        }
-        wavePaletteCachePut(key, resolved)
-        value = resolved
-    }
-    val wavePaletteAnim = tween<Color>(durationMillis = 1500, easing = LinearEasing)
-    val c0 by animateColorAsState(targetValue = paletteTarget[0], animationSpec = wavePaletteAnim, label = "wave_c0")
-    val c1 by animateColorAsState(targetValue = paletteTarget[1], animationSpec = wavePaletteAnim, label = "wave_c1")
-    val c2 by animateColorAsState(targetValue = paletteTarget[2], animationSpec = wavePaletteAnim, label = "wave_c2")
-    val c3 by animateColorAsState(targetValue = paletteTarget[3], animationSpec = wavePaletteAnim, label = "wave_c3")
-
-    val transition = rememberInfiniteTransition(label = "wave_motion")
-    val phaseA by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 10_000, easing = LinearEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
-        ),
-        label = "wave_phase_a"
-    )
-    val phaseB by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 8_000, easing = LinearEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
-        ),
-        label = "wave_phase_b"
-    )
-    val breathe by transition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 7_000, easing = LinearEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-        ),
-        label = "wave_breathe"
-    )
-    val pulsar by transition.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 10_800, easing = LinearEasing),
-            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
-        ),
-        label = "wave_pulsar"
-    )
+    val visualClockSeconds = rememberMyWaveAnimationClockSeconds()
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(396.dp)
     ) {
-        when (look) {
-            MyWaveLook.Clouds -> MyWaveCloudsBackground(
-                colors = listOf(c0, c1, c2, c3),
-                phaseA = phaseA,
-                phaseB = phaseB,
-                breathe = breathe,
-                pulsar = pulsar,
+        Crossfade(
+            targetState = track,
+            animationSpec = tween(
+                durationMillis = 900,
+                easing = androidx.compose.animation.core.FastOutSlowInEasing
+            ),
+            label = "my_wave_track_transition"
+        ) { displayedTrack ->
+            HomeMyWaveVisualBackground(
+                track = displayedTrack,
+                look = look,
+                isPlaying = isPlaying,
+                visualClockSeconds = visualClockSeconds,
                 modifier = Modifier.matchParentSize()
             )
-            MyWaveLook.Contours -> Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .padding(horizontal = 8.dp, vertical = 18.dp)
-            ) {
-                val trackSeedTarget = remember(track.id) {
-                    ((((track.id.hashCode().toLong() and 0xffffffffL) % 1000L).toFloat()) / 1000f).coerceIn(0f, 1f)
-                }
-                val trackSeed by animateFloatAsState(
-                    targetValue = trackSeedTarget,
-                    animationSpec = tween(
-                        durationMillis = if (isPlaying) 1020 else 1160,
-                        easing = androidx.compose.animation.core.FastOutSlowInEasing
-                    ),
-                    label = "wave_track_seed"
-                )
-                MyWaveContoursBackground(
-                    colors = listOf(c0, c1, c2, c3),
-                    trackSeed = trackSeed,
-                    isPlaying = isPlaying,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-        }
-
-        if (look == MyWaveLook.Clouds) {
-            WaveGrainOverlay(seed = track.id.hashCode(), modifier = Modifier.matchParentSize())
         }
 
         Column(
@@ -6320,6 +6239,89 @@ private fun HomeMyWaveCard(
                         fontWeight = FontWeight.SemiBold
                     ),
                     color = overlayTextColor
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeMyWaveVisualBackground(
+    track: TrackItem,
+    look: MyWaveLook,
+    isPlaying: Boolean,
+    visualClockSeconds: Float,
+    modifier: Modifier = Modifier
+) {
+    val paletteCacheKey = remember(track.id, track.artworkPath, track.filePath) {
+        wavePaletteCacheKey(track)
+    }
+    val paletteTarget by produceState(
+        initialValue = paletteCacheKey?.let { wavePaletteCacheGet(it) } ?: defaultWavePalette(),
+        key1 = paletteCacheKey
+    ) {
+        val key = paletteCacheKey ?: run {
+            value = defaultWavePalette()
+            return@produceState
+        }
+        wavePaletteCacheGet(key)?.let { cached ->
+            value = cached
+            return@produceState
+        }
+        val resolved = withContext(Dispatchers.IO) {
+            buildWavePaletteForTrack(track)
+        }
+        wavePaletteCachePut(key, resolved)
+        value = resolved
+    }
+    val wavePaletteAnim = tween<Color>(
+        durationMillis = 2200,
+        easing = androidx.compose.animation.core.FastOutSlowInEasing
+    )
+    val c0 by animateColorAsState(targetValue = paletteTarget[0], animationSpec = wavePaletteAnim, label = "wave_c0")
+    val c1 by animateColorAsState(targetValue = paletteTarget[1], animationSpec = wavePaletteAnim, label = "wave_c1")
+    val c2 by animateColorAsState(targetValue = paletteTarget[2], animationSpec = wavePaletteAnim, label = "wave_c2")
+    val c3 by animateColorAsState(targetValue = paletteTarget[3], animationSpec = wavePaletteAnim, label = "wave_c3")
+
+    val phaseA = waveWrap01(visualClockSeconds / 10.0f)
+    val phaseB = waveWrap01(visualClockSeconds / 8.0f)
+    val breathe = waveAutoReverseValue(
+        time = visualClockSeconds,
+        duration = 7.0f,
+        from = 0.96f,
+        to = 1.04f
+    )
+    val pulsar = waveAutoReverseValue(
+        time = visualClockSeconds,
+        duration = 10.8f,
+        from = 0.92f,
+        to = 1.08f
+    )
+
+    Box(modifier = modifier) {
+        when (look) {
+            MyWaveLook.Clouds -> {
+                MyWaveCloudsBackground(
+                    colors = listOf(c0, c1, c2, c3),
+                    phaseA = phaseA,
+                    phaseB = phaseB,
+                    breathe = breathe,
+                    pulsar = pulsar,
+                    modifier = Modifier.matchParentSize()
+                )
+                WaveGrainOverlay(seed = track.id.hashCode(), modifier = Modifier.matchParentSize())
+            }
+            MyWaveLook.Contours -> Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .padding(horizontal = 8.dp, vertical = 18.dp)
+            ) {
+                MyWaveContoursBackground(
+                    colors = listOf(c0, c1, c2, c3),
+                    trackSeed = waveTrackSeed(track.id),
+                    isPlaying = isPlaying,
+                    visualClockSeconds = visualClockSeconds,
+                    modifier = Modifier.matchParentSize()
                 )
             }
         }
@@ -6416,6 +6418,7 @@ private fun MyWaveContoursBackground(
     colors: List<Color>,
     trackSeed: Float,
     isPlaying: Boolean,
+    visualClockSeconds: Float,
     modifier: Modifier = Modifier
 ) {
     val c0 = colors.getOrElse(0) { Color(0xFF4A3E35) }
@@ -6439,19 +6442,6 @@ private fun MyWaveContoursBackground(
         animationSpec = tween(durationMillis = 280, easing = LinearEasing),
         label = "wave_contours_line_layer"
     )
-    var contourClock by remember { mutableFloatStateOf(0f) }
-
-    LaunchedEffect(Unit) {
-        var lastFrameNanos = 0L
-        while (true) {
-            withFrameNanos { frameNanos ->
-                if (lastFrameNanos != 0L) {
-                    contourClock += ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
-                }
-                lastFrameNanos = frameNanos
-            }
-        }
-    }
 
     Canvas(
         modifier = modifier.graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
@@ -6460,7 +6450,7 @@ private fun MyWaveContoursBackground(
         val height = size.height
         if (width <= 1f || height <= 1f) return@Canvas
 
-        val t = contourClock
+        val t = visualClockSeconds
         val durationMultiplier = if (isPlaying) 1.0f else 1.28f
         val canvasCenter = Offset(width * 0.5f, height * 0.5f)
         val baseCenter = Offset(width * 0.5f, height * 0.5f)
@@ -6726,6 +6716,32 @@ private fun waveGradientRadius(size: Size, center: Offset): Float {
     val dx = max(center.x, size.width - center.x)
     val dy = max(center.y, size.height - center.y)
     return sqrt((dx * dx) + (dy * dy)).coerceAtLeast(1f)
+}
+
+private fun waveTrackSeed(trackId: String): Float {
+    return ((((trackId.hashCode().toLong() and 0xffffffffL) % 1000L).toFloat()) / 1000f).coerceIn(0f, 1f)
+}
+
+private fun currentMyWaveAnimationClockSeconds(): Float {
+    val elapsedNanos = (SystemClock.elapsedRealtimeNanos() - MyWaveAnimationEpochNanos).coerceAtLeast(0L)
+    return (elapsedNanos / 1_000_000_000.0).toFloat()
+}
+
+@Composable
+private fun rememberMyWaveAnimationClockSeconds(): Float {
+    var clockSeconds by remember {
+        mutableFloatStateOf(currentMyWaveAnimationClockSeconds())
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos {
+                clockSeconds = currentMyWaveAnimationClockSeconds()
+            }
+        }
+    }
+
+    return clockSeconds
 }
 
 private fun waveContourVariant(cycle: Float): Float {
