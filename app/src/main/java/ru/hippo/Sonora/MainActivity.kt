@@ -6196,17 +6196,6 @@ private fun HomeMyWaveCard(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             val overlayTextColor = if (lightTheme) Color(0xFF201712) else Color.White
-            val buttonShape = RoundedCornerShape(13.dp)
-            val buttonBackground = if (lightTheme) {
-                Color.White.copy(alpha = 0.52f)
-            } else {
-                Color.White.copy(alpha = 0.08f)
-            }
-            val buttonBorder = if (lightTheme) {
-                overlayTextColor.copy(alpha = 0.12f)
-            } else {
-                Color.White.copy(alpha = 0.12f)
-            }
             Text(
                 text = "My wave",
                 style = TextStyle(
@@ -6218,9 +6207,6 @@ private fun HomeMyWaveCard(
             )
             Row(
                 modifier = Modifier
-                    .clip(buttonShape)
-                    .background(buttonBackground, buttonShape)
-                    .border(width = 1.dp, color = buttonBorder, shape = buttonShape)
                     .clickable(onClick = onPlayToggle)
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -6543,10 +6529,10 @@ private fun MyWaveContoursBackground(
         )
 
         val linePalette = listOf(
-            if (lightTheme) blendColors(c3, Color.White, 0.14f) else blendColors(c3, Color.White, 0.06f),
-            if (lightTheme) blendColors(c1, Color.White, 0.20f) else blendColors(c1, Color.White, 0.08f),
-            if (lightTheme) blendColors(c2, Color.White, 0.16f) else blendColors(c2, Color.White, 0.06f),
-            if (lightTheme) blendColors(c0, Color.White, 0.10f) else blendColors(c0, Color.White, 0.02f)
+            if (lightTheme) blendColors(c3, Color.Black, 0.22f) else blendColors(c3, Color.White, 0.06f),
+            if (lightTheme) blendColors(c1, Color.Black, 0.24f) else blendColors(c1, Color.White, 0.08f),
+            if (lightTheme) blendColors(c2, Color.Black, 0.20f) else blendColors(c2, Color.White, 0.06f),
+            if (lightTheme) blendColors(c0, Color.Black, 0.18f) else blendColors(c0, Color.White, 0.02f)
         )
 
         drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint())
@@ -6576,7 +6562,7 @@ private fun MyWaveContoursBackground(
             ).coerceIn(0f, 1f) * lineLayerOpacity
 
             val baseStrokeAlpha = if (lightTheme) {
-                if (index < 3) 0.88f else 0.68f
+                if (index < 3) 0.98f else 0.82f
             } else {
                 if (index < 3) 1.0f else 0.82f
             }
