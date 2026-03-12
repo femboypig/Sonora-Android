@@ -6444,7 +6444,12 @@ private fun MyWaveContoursBackground(
             radius = coreRadius
         )
 
-        val palette = listOf(c0, c1, c2, c3)
+        val linePalette = listOf(
+            if (lightTheme) blendColors(c3, Color.White, 0.14f) else blendColors(c3, Color.White, 0.06f),
+            if (lightTheme) blendColors(c1, Color.White, 0.20f) else blendColors(c1, Color.White, 0.08f),
+            if (lightTheme) blendColors(c2, Color.White, 0.16f) else blendColors(c2, Color.White, 0.06f),
+            if (lightTheme) blendColors(c0, Color.White, 0.10f) else blendColors(c0, Color.White, 0.02f)
+        )
         repeat(ringCount) { index ->
             val progress = index / (ringCount - 1f)
             val envelope = (1.0f - kotlin.math.abs(progress - 0.5f) * 1.08f).coerceAtLeast(0.38f)
@@ -6467,7 +6472,7 @@ private fun MyWaveContoursBackground(
                 size.minDimension * (0.014f + (progress * 0.010f)) *
                     (if (isPlaying) 1.0f else 0.82f) *
                     (1.0f + (((compression * 0.16f) + (neighborPush * 0.10f)) * envelope))
-            val pointCount = 56
+            val pointCount = if (isPlaying) 44 else 40
 
             val contour = Path().apply {
                 for (point in 0..pointCount) {
@@ -6494,12 +6499,6 @@ private fun MyWaveContoursBackground(
                 close()
             }
 
-            val linePalette = listOf(
-                if (lightTheme) blendColors(c3, Color.White, 0.14f) else blendColors(c3, Color.White, 0.06f),
-                if (lightTheme) blendColors(c1, Color.White, 0.20f) else blendColors(c1, Color.White, 0.08f),
-                if (lightTheme) blendColors(c2, Color.White, 0.16f) else blendColors(c2, Color.White, 0.06f),
-                if (lightTheme) blendColors(c0, Color.White, 0.10f) else blendColors(c0, Color.White, 0.02f)
-            )
             val base = linePalette[index % linePalette.size]
             val baseOpacity = if (isPlaying) {
                 if (index < 2) 0.96f else if (index < 4) 0.82f else 0.66f
