@@ -2249,10 +2249,19 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             val installed = installMiniStreamingTrackToLibrary(track, payload)
             if (installed == null && showErrorMessage) {
                 snackbarHostState.showSnackbar("Install failed for ${track.title}")
-            } else if (installed != null && miniStreamingActiveTrackId == track.trackId && playbackController.currentTrackId == null) {
+            } else if (installed != null && miniStreamingActiveTrackId == track.trackId) {
                 val targetPlaybackId = miniStreamingPlaybackIdForTrack(track.trackId)
                 val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
-                if (playbackQueue.any { it.id == targetPlaybackId }) {
+                val currentPlaybackId = playbackController.currentTrackId
+                val currentPlaybackPath = playbackController.currentTrack?.filePath.orEmpty()
+                val shouldForceLocalStart =
+                    currentPlaybackId == null ||
+                        currentPlaybackId == targetPlaybackId ||
+                        currentPlaybackPath.startsWith("http://", ignoreCase = true) ||
+                        currentPlaybackPath.startsWith("https://", ignoreCase = true) ||
+                        !playbackController.isPlaying
+                if (shouldForceLocalStart && playbackQueue.any { it.id == targetPlaybackId }) {
+                    playbackController.stop()
                     playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
                     playerVisible = true
                 }
