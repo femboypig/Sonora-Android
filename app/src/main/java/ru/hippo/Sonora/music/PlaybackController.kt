@@ -54,7 +54,8 @@ enum class RepeatMode {
 class PlaybackController(
     context: Context,
     private val onTrackPlayed: (String) -> Unit = {},
-    private val onTrackSkipped: (String) -> Unit = {}
+    private val onTrackSkipped: (String) -> Unit = {},
+    private val onTrackPlaybackFailed: (String) -> Unit = {}
 ) {
 
     var currentTrackId: String? by mutableStateOf(null)
@@ -702,6 +703,7 @@ class PlaybackController(
 
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     if (playRequestToken == requestToken && exoPlayer === remotePlayer) {
+                        val failedTrackId = currentTrackId
                         playerPrepared = false
                         pendingPlayWhenPrepared = false
                         isPreparing = false
@@ -710,6 +712,9 @@ class PlaybackController(
                         currentTrackId = null
                         this@PlaybackController.isPlaying = false
                         updateExternalState()
+                        if (!failedTrackId.isNullOrBlank()) {
+                            onTrackPlaybackFailed(failedTrackId)
+                        }
                     }
                 }
             })
@@ -756,6 +761,7 @@ class PlaybackController(
                 }
                 setOnErrorListener { failedPlayer, _, _ ->
                     if (playRequestToken == requestToken && mediaPlayer === failedPlayer) {
+                        val failedTrackId = currentTrackId
                         playerPrepared = false
                         pendingPlayWhenPrepared = false
                         isPreparing = false
@@ -764,6 +770,9 @@ class PlaybackController(
                         currentTrackId = null
                         this@PlaybackController.isPlaying = false
                         updateExternalState()
+                        if (!failedTrackId.isNullOrBlank()) {
+                            onTrackPlaybackFailed(failedTrackId)
+                        }
                     } else {
                         runCatching { failedPlayer.release() }
                     }
