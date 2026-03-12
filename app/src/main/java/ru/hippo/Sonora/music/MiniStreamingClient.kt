@@ -50,6 +50,18 @@ private data class BackendHttpResult(
     val transportError: String
 )
 
+private fun preferredYouTubeArtworkUrl(
+    trackId: String,
+    fallbackUrl: String,
+    engine: String
+): String {
+    val normalizedTrackId = trackId.trim()
+    if (engine == "youtube" && normalizedTrackId.length == 11) {
+        return "https://i.ytimg.com/vi/$normalizedTrackId/maxresdefault.jpg"
+    }
+    return fallbackUrl.trim()
+}
+
 class MiniStreamingClient(
     backendBaseUrl: String = DEFAULT_BACKEND_BASE_URL
 ) {
@@ -492,6 +504,8 @@ class MiniStreamingClient(
                 node.optString("artworkUrl").trim()
                     .ifBlank { node.optString("thumbnail").trim() }
                     .ifBlank { node.optString("cover").trim() }
+            }.let { fallback ->
+                preferredYouTubeArtworkUrl(trackId, fallback, normalizedSearchEngine())
             }
 
         return MiniStreamingTrack(
@@ -666,6 +680,7 @@ class MiniStreamingClient(
             .ifBlank { data.optString("cover") }
             .ifBlank { data.optString("artworkUrl") }
             .orEmpty()
+            .let { fallback -> preferredYouTubeArtworkUrl(trackId, fallback, normalizedSearchEngine()) }
 
         val normalizedExtension = extension.ifBlank {
             guessExtensionFromUrl(mediaUrl)
