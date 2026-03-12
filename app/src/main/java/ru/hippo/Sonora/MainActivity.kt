@@ -6508,7 +6508,7 @@ private fun MyWaveContoursBackground(
                 size.minDimension * (0.014f + (progress * 0.010f)) *
                     (if (isPlaying) 1.0f else 0.82f) *
                     (1.0f + (((compression * 0.16f) + (neighborPush * 0.10f)) * envelope))
-            val pointCount = if (isPlaying) 36 else 32
+            val pointCount = if (isPlaying) 30 else 26
 
             val contour = Path().apply {
                 for (point in 0..pointCount) {
@@ -6545,15 +6545,6 @@ private fun MyWaveContoursBackground(
             val alpha = (baseOpacity + (sin(((t * (0.58f + (progress * 0.06f))) + ringPhase).toDouble()).toFloat() * swing))
                 .coerceIn(0.24f, 1.0f)
             val lineColor = base.copy(alpha = alpha)
-            val lineBrush = Brush.linearGradient(
-                colors = listOf(
-                    lineColor,
-                    blendColors(lineColor, Color.White, if (lightTheme) 0.14f else 0.08f),
-                    lineColor
-                ),
-                start = Offset(ringCenterX - radiusX, ringCenterY - radiusY),
-                end = Offset(ringCenterX + radiusX, ringCenterY + radiusY)
-            )
 
             drawPath(
                 path = contour,
@@ -6572,7 +6563,7 @@ private fun MyWaveContoursBackground(
             )
             drawPath(
                 path = contour,
-                brush = lineBrush,
+                color = lineColor,
                 style = Stroke(
                     width = size.minDimension * (0.0078f - (progress * 0.00058f)),
                     cap = StrokeCap.Round,
