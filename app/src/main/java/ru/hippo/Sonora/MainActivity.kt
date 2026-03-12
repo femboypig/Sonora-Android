@@ -128,15 +128,21 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -173,7 +179,10 @@ import org.json.JSONObject
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -6249,10 +6258,6 @@ private fun HomeMyWaveCard(
                 MyWaveContoursBackground(
                     colors = listOf(c0, c1, c2, c3),
                     trackSeed = trackSeed,
-                    phaseA = phaseA,
-                    phaseB = phaseB,
-                    breathe = breathe,
-                    pulsar = pulsar,
                     isPlaying = isPlaying,
                     modifier = Modifier.matchParentSize()
                 )
@@ -6395,10 +6400,6 @@ private fun MyWaveCloudsBackground(
 private fun MyWaveContoursBackground(
     colors: List<Color>,
     trackSeed: Float,
-    phaseA: Float,
-    phaseB: Float,
-    breathe: Float,
-    pulsar: Float,
     isPlaying: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -6407,80 +6408,136 @@ private fun MyWaveContoursBackground(
     val c2 = colors.getOrElse(2) { c1 }
     val c3 = colors.getOrElse(3) { c2 }
     val lightTheme = !androidx.compose.foundation.isSystemInDarkTheme()
-    val colorSeed = (
-        (c0.red * 0.31f) +
-            (c1.green * 0.27f) +
-            (c2.blue * 0.23f) +
-            (c3.red * 0.19f)
-        ).coerceIn(0f, 1f)
     val ringCount = 7
+    val haloLayerOpacity by animateFloatAsState(
+        targetValue = if (isPlaying) 0.94f else 0.78f,
+        animationSpec = tween(durationMillis = 280, easing = LinearEasing),
+        label = "wave_contours_halo_layer"
+    )
+    val coreLayerOpacity by animateFloatAsState(
+        targetValue = if (isPlaying) 0.74f else 0.50f,
+        animationSpec = tween(durationMillis = 280, easing = LinearEasing),
+        label = "wave_contours_core_layer"
+    )
+    val lineLayerOpacity by animateFloatAsState(
+        targetValue = if (isPlaying) 1.0f else 0.92f,
+        animationSpec = tween(durationMillis = 280, easing = LinearEasing),
+        label = "wave_contours_line_layer"
+    )
     var contourClock by remember { mutableFloatStateOf(0f) }
-
-    val playingState by rememberUpdatedState(isPlaying)
 
     LaunchedEffect(Unit) {
         var lastFrameNanos = 0L
         while (true) {
             withFrameNanos { frameNanos ->
                 if (lastFrameNanos != 0L) {
-                    val deltaSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
-                    val speed = if (playingState) 1.06f else 0.44f
-                    contourClock += deltaSeconds * speed
+                    contourClock += ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceAtMost(0.05f)
                 }
                 lastFrameNanos = frameNanos
             }
         }
     }
 
-    Canvas(modifier = modifier) {
-        val tau = (Math.PI * 2.0).toFloat()
-        val motion = if (isPlaying) 1.0f else 0.66f
-        val seedPhase = (trackSeed * tau) + (colorSeed * tau * 0.18f)
+    Canvas(
+        modifier = modifier.graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+    ) {
+        val width = size.width
+        val height = size.height
+        if (width <= 1f || height <= 1f) return@Canvas
+
         val t = contourClock
-        val driverA = sin(((t * 0.24f) + seedPhase).toDouble()).toFloat()
-        val driverB = cos(((t * 0.17f) - (seedPhase * 0.33f)).toDouble()).toFloat()
-        val driverC = sin(((t * 0.13f) + (seedPhase * 0.61f)).toDouble()).toFloat()
-        val driverD = cos(((t * 0.20f) + (seedPhase * 0.19f)).toDouble()).toFloat()
-        val macroA = (driverA * 0.52f) + (driverC * 0.28f) + (driverD * 0.20f)
-        val macroB = (driverB * 0.48f) + (driverC * 0.24f) + (driverD * 0.28f)
-        val macroC = (driverA * driverB * 0.22f) + (driverC * 0.42f) + (driverD * 0.36f)
-        val sharedCompression = (driverA * 0.46f) + (driverB * 0.22f) + (driverC * 0.14f)
-        val sharedLift = (driverD * 0.36f) + (driverB * 0.18f)
-        val audioLift = ((((phaseA - phaseB) * 0.5f) + 0.5f).coerceIn(0f, 1f) - 0.5f) * 0.06f
-        val center = Offset(
-            x = (size.width * 0.5f) + ((macroA * 0.62f) + (macroC * 0.20f)) * size.width * 0.0042f * motion,
-            y = (size.height * 0.53f) + (((macroB * 0.60f) + (macroC * 0.16f)) + audioLift) * size.height * 0.0062f * motion
+        val durationMultiplier = if (isPlaying) 1.0f else 1.28f
+        val canvasCenter = Offset(width * 0.5f, height * 0.5f)
+        val baseCenter = Offset(width * 0.5f, height * 0.5f)
+        val haloCenter = Offset(width * 0.62f, height * 0.42f)
+        val coreCenter = Offset(width * 0.5f, height * 0.52f)
+
+        val baseRadius = waveGradientRadius(size, baseCenter)
+        val haloRadius = waveGradientRadius(size, haloCenter)
+        val coreRadius = waveGradientRadius(size, coreCenter)
+        val referenceWidth = 360.dp.toPx()
+        val referenceHeight = 220.dp.toPx()
+        val geometryScale = max(0.92f, min(1.20f, min(width / referenceWidth, height / referenceHeight)))
+        val lineWidths = floatArrayOf(2.8f, 2.5f, 2.2f, 1.9f, 1.7f, 1.5f, 1.2f).map {
+            it.dp.toPx() * geometryScale
+        }
+        val shadowSpreads = floatArrayOf(18f, 18f, 12f, 12f, 8f, 8f, 8f).map {
+            it.dp.toPx() * 0.42f
+        }
+
+        val baseColors = arrayOf(
+            0.0f to (
+                if (lightTheme) blendColors(c1, Color.White, 0.90f) else blendColors(c0, Color.Black, 0.42f)
+                ).copy(alpha = if (lightTheme) 0.16f else 0.28f),
+            0.22f to (
+                if (lightTheme) blendColors(c2, Color.White, 0.92f) else blendColors(c2, Color.Black, 0.56f)
+                ).copy(alpha = if (lightTheme) 0.08f else 0.15f),
+            0.58f to (
+                if (lightTheme) blendColors(c0, Color.White, 0.97f) else blendColors(c3, Color.Black, 0.76f)
+                ).copy(alpha = if (lightTheme) 0.02f else 0.04f),
+            1.0f to Color.Transparent
         )
-        val haloRadius = size.minDimension * (0.35f + ((pulsar - 0.92f) * 0.11f))
-        drawCircle(
+        drawRect(
             brush = Brush.radialGradient(
-                colors = listOf(
-                    blendColors(if (lightTheme) blendColors(c0, Color.White, 0.16f) else c0, c1, 0.52f)
-                        .copy(alpha = if (isPlaying) 0.30f else 0.20f),
-                    Color.Transparent
-                ),
-                center = center,
-                radius = haloRadius
-            ),
-            center = center,
-            radius = haloRadius
+                colorStops = baseColors,
+                center = baseCenter,
+                radius = baseRadius
+            )
         )
 
-        val coreRadius = size.minDimension * (0.24f + ((breathe - 0.95f) * 0.06f))
+        val haloScale = waveAutoReverseValue(
+            time = t,
+            duration = if (isPlaying) 4.2f else 6.0f,
+            from = if (isPlaying) 0.96f else 0.985f,
+            to = if (isPlaying) 1.08f else 1.03f
+        )
+        val haloPulseFactor = waveAutoReverseValue(
+            time = t,
+            duration = if (isPlaying) 3.6f else 5.4f,
+            from = if (isPlaying) 0.85f else 0.82f,
+            to = 1.0f
+        )
+        val haloColor = if (lightTheme) blendColors(c3, Color.White, 0.68f) else blendColors(c3, Color.White, 0.18f)
         drawCircle(
             brush = Brush.radialGradient(
-                colors = listOf(
-                    blendColors(if (lightTheme) blendColors(c1, Color.White, 0.20f) else c1, c2, 0.48f)
-                        .copy(alpha = if (isPlaying) 0.22f else 0.14f),
-                    blendColors(if (lightTheme) blendColors(c2, Color.White, 0.18f) else c2, c3, 0.42f)
-                        .copy(alpha = if (isPlaying) 0.10f else 0.05f),
-                    Color.Transparent
+                colorStops = arrayOf(
+                    0.0f to haloColor.copy(alpha = (if (lightTheme) 0.22f else 0.28f) * haloLayerOpacity * haloPulseFactor),
+                    0.42f to haloColor.copy(alpha = (if (lightTheme) 0.07f else 0.10f) * haloLayerOpacity * haloPulseFactor),
+                    1.0f to Color.Transparent
                 ),
-                center = center,
-                radius = coreRadius
+                center = haloCenter,
+                radius = haloRadius * haloScale
             ),
-            center = center,
-            radius = coreRadius
+            center = haloCenter,
+            radius = haloRadius * haloScale
+        )
+
+        val coreScale = waveAutoReverseValue(
+            time = t,
+            duration = if (isPlaying) 5.4f else 7.2f,
+            from = if (isPlaying) 0.92f else 0.96f,
+            to = if (isPlaying) 1.04f else 1.01f
+        )
+        val corePulseFactor = waveAutoReverseValue(
+            time = t,
+            duration = if (isPlaying) 4.8f else 6.6f,
+            from = if (isPlaying) 0.70f else 0.76f,
+            to = if (isPlaying) 1.11f else 1.16f
+        )
+        val coreColor = if (lightTheme) blendColors(c2, Color.White, 0.58f) else blendColors(c2, Color.White, 0.08f)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colorStops = arrayOf(
+                    0.0f to coreColor.copy(alpha = (if (lightTheme) 0.22f else 0.20f) * coreLayerOpacity * corePulseFactor),
+                    0.22f to coreColor.copy(alpha = (if (lightTheme) 0.08f else 0.07f) * coreLayerOpacity * corePulseFactor),
+                    0.52f to coreColor.copy(alpha = 0.0f),
+                    1.0f to Color.Transparent
+                ),
+                center = coreCenter,
+                radius = coreRadius * coreScale
+            ),
+            center = coreCenter,
+            radius = coreRadius * coreScale
         )
 
         val linePalette = listOf(
@@ -6489,102 +6546,244 @@ private fun MyWaveContoursBackground(
             if (lightTheme) blendColors(c2, Color.White, 0.16f) else blendColors(c2, Color.White, 0.06f),
             if (lightTheme) blendColors(c0, Color.White, 0.10f) else blendColors(c0, Color.White, 0.02f)
         )
+
+        drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint())
         repeat(ringCount) { index ->
-            val progress = index / (ringCount - 1f)
-            val envelope = (1.0f - kotlin.math.abs(progress - 0.5f) * 1.08f).coerceAtLeast(0.38f)
-            val ringPhase = seedPhase + (progress * 1.15f) + (t * (0.40f + (progress * 0.075f)))
-            val neighborPush =
-                sin(((t * (0.31f + (progress * 0.030f))) + seedPhase + (progress * 2.6f)).toDouble()).toFloat() * 0.48f +
-                    cos(((t * (0.22f + (progress * 0.018f))) - (seedPhase * 0.44f) + (progress * 1.7f)).toDouble()).toFloat() * 0.24f
-            val compression = (sharedCompression * 0.58f) + (neighborPush * 0.42f)
-            val ringCenterX =
-                center.x +
-                    sin(((ringPhase * 0.72f) + (macroA * 0.18f)).toDouble()).toFloat() * size.width * (0.018f + (envelope * 0.004f))
-            val ringCenterY =
-                center.y +
-                    cos(((ringPhase * 0.54f) + 0.6f + (macroB * 0.16f)).toDouble()).toFloat() * size.height * (0.022f + (envelope * 0.006f)) +
-                    (((compression * 0.010f) + (sharedLift * 0.004f)) * size.height * motion)
-            val radiusPush = ((compression * 0.080f) + (neighborPush * 0.050f)) * envelope * motion
-            val radiusX = (size.width * (0.17f + (progress * 0.23f))) * (1.0f + (radiusPush * 0.50f))
-            val radiusY = (size.height * (0.13f + (progress * 0.17f))) * (1.0f - (radiusPush * 0.42f))
-            val amplitude =
-                size.minDimension * (0.014f + (progress * 0.010f)) *
-                    (if (isPlaying) 1.0f else 0.82f) *
-                    (1.0f + (((compression * 0.16f) + (neighborPush * 0.10f)) * envelope))
-            val pointCount = if (isPlaying) 38 else 34
-            val contourPoints = ArrayList<Offset>(pointCount)
-            for (point in 0 until pointCount) {
-                val angle = (point / pointCount.toFloat()) * tau
-                val wobbleA =
-                    sin((((angle * 2f) + ringPhase) + (neighborPush * 0.52f) + (macroA * 0.14f)).toDouble())
-                        .toFloat() * amplitude
-                val wobbleB =
-                    cos((((angle * 3f) - (ringPhase * 0.74f)) + (compression * 0.36f) + (macroB * 0.10f)).toDouble())
-                        .toFloat() * amplitude * 0.54f
-                val wobbleC =
-                    sin((((angle * 5f) + (ringPhase * 1.12f)) + (neighborPush * 0.24f) + (macroC * 0.08f)).toDouble())
-                        .toFloat() * amplitude * 0.20f
-                val orbitX = cos(angle.toDouble()).toFloat() * (radiusX + wobbleA + wobbleB)
-                val orbitY = sin(angle.toDouble()).toFloat() * (radiusY + (wobbleA * 0.72f) - (wobbleB * 0.16f) + wobbleC)
-                contourPoints += Offset(ringCenterX + orbitX, ringCenterY + orbitY)
-            }
+            val progress = index / (ringCount - 1f).toFloat()
+            val pathDuration = (8.4f + (index * 0.85f)) * durationMultiplier
+            val pathCycle = waveWrap01((t + (index * 0.08f)) / pathDuration)
+            val variant = waveContourVariant(pathCycle)
+            val contour = buildWaveContourPath(index = index, ringCount = ringCount, pulseSeed = trackSeed, variant = variant)
 
-            val contour = Path().apply {
-                if (contourPoints.isNotEmpty()) {
-                    val firstMid = Offset(
-                        (contourPoints.last().x + contourPoints.first().x) * 0.5f,
-                        (contourPoints.last().y + contourPoints.first().y) * 0.5f
-                    )
-                    moveTo(firstMid.x, firstMid.y)
-                    contourPoints.forEachIndexed { pointIndex, current ->
-                        val next = contourPoints[(pointIndex + 1) % contourPoints.size]
-                        val mid = Offset(
-                            (current.x + next.x) * 0.5f,
-                            (current.y + next.y) * 0.5f
-                        )
-                        quadraticBezierTo(current.x, current.y, mid.x, mid.y)
-                    }
-                    close()
-                }
-            }
-
-            val base = linePalette[index % linePalette.size]
             val baseOpacity = if (isPlaying) {
                 if (index < 2) 0.96f else if (index < 4) 0.82f else 0.66f
             } else {
                 if (index < 2) 0.78f else if (index < 4) 0.64f else 0.52f
             }
             val swing = if (isPlaying) 0.16f else 0.10f
-            val alpha = (baseOpacity + (sin(((t * (0.58f + (progress * 0.06f))) + ringPhase).toDouble()).toFloat() * swing))
-                .coerceIn(0.24f, 1.0f)
-            val lineColor = base.copy(alpha = alpha)
+            val opacityDuration = (4.8f + (index * 0.50f)) * durationMultiplier
+            val opacityCycle = waveWrap01((t + (index * 0.08f)) / opacityDuration)
+            val animatedOpacity = waveKeyframedValue(
+                cycle = opacityCycle,
+                firstStop = 0.32f,
+                secondStop = 0.70f,
+                v0 = baseOpacity - (swing * 0.35f),
+                v1 = baseOpacity + swing,
+                v2 = baseOpacity - (swing * 0.18f),
+                v3 = baseOpacity - (swing * 0.35f)
+            ).coerceIn(0f, 1f) * lineLayerOpacity
 
-            drawPath(
-                path = contour,
-                color = lineColor.copy(
-                    alpha = if (lightTheme) {
-                        if (index < 3) 0.24f else 0.12f
-                    } else {
-                        if (index < 3) 0.42f else 0.22f
-                    }
-                ),
-                style = Stroke(
-                    width = size.minDimension * (0.0138f - (progress * 0.00088f)),
-                    cap = StrokeCap.Round,
-                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+            val baseStrokeAlpha = if (lightTheme) {
+                if (index < 3) 0.88f else 0.68f
+            } else {
+                if (index < 3) 1.0f else 0.82f
+            }
+            val shadowBaseOpacity = if (lightTheme) {
+                if (index < 3) 0.30f else 0.16f
+            } else {
+                if (index < 3) 0.50f else 0.30f
+            }
+            val shadowOpacity = if (isPlaying) {
+                waveAutoReverseValue(
+                    time = t + (index * 0.04f),
+                    duration = 5.6f + (index * 0.55f),
+                    from = max(0f, shadowBaseOpacity * 0.78f),
+                    to = min(1f, shadowBaseOpacity + 0.18f)
                 )
-            )
-            drawPath(
-                path = contour,
-                color = lineColor,
-                style = Stroke(
-                    width = size.minDimension * (0.0078f - (progress * 0.00058f)),
-                    cap = StrokeCap.Round,
-                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+            } else {
+                shadowBaseOpacity
+            }
+
+            val lineScale = if (isPlaying) {
+                waveAutoReverseValue(
+                    time = t + (index * 0.06f),
+                    duration = 7.4f + (index * 0.70f),
+                    from = 0.998f - (index * 0.0008f),
+                    to = 1.010f + (index * 0.0012f)
                 )
+            } else {
+                1.0f
+            }
+            val rotationBaseDegrees = (0.0016f + (index * 0.0006f)) * (180f / Math.PI.toFloat())
+            val rotationDegrees = if (isPlaying) {
+                waveAutoReverseValue(
+                    time = t + (index * 0.05f),
+                    duration = 12.2f + (index * 0.80f),
+                    from = -rotationBaseDegrees,
+                    to = rotationBaseDegrees
+                )
+            } else {
+                0.0f
+            }
+
+            val lineColor = linePalette[index % linePalette.size].copy(alpha = baseStrokeAlpha * animatedOpacity)
+            val shadowColor = linePalette[index % linePalette.size].copy(
+                alpha = baseStrokeAlpha * animatedOpacity * shadowOpacity
             )
+            val lineWidth = lineWidths[index]
+            val shadowWidth = lineWidth + shadowSpreads[index]
+
+            withTransform({
+                if (rotationDegrees != 0.0f) {
+                    rotate(degrees = rotationDegrees, pivot = canvasCenter)
+                }
+                if (lineScale != 1.0f) {
+                    scale(scaleX = lineScale, scaleY = lineScale, pivot = canvasCenter)
+                }
+            }) {
+                drawPath(
+                    path = contour,
+                    color = shadowColor,
+                    style = Stroke(
+                        width = shadowWidth,
+                        cap = StrokeCap.Round,
+                        join = androidx.compose.ui.graphics.StrokeJoin.Round
+                    )
+                )
+                drawPath(
+                    path = contour,
+                    color = lineColor,
+                    style = Stroke(
+                        width = lineWidth,
+                        cap = StrokeCap.Round,
+                        join = androidx.compose.ui.graphics.StrokeJoin.Round
+                    )
+                )
+            }
         }
+        drawRect(
+            brush = Brush.radialGradient(
+                colorStops = arrayOf(
+                    0.0f to Color.White.copy(alpha = 0.0f),
+                    0.16f to Color.White.copy(alpha = 0.88f),
+                    0.46f to Color.White.copy(alpha = 1.0f),
+                    0.82f to Color.White.copy(alpha = 0.72f),
+                    1.0f to Color.White.copy(alpha = 0.0f)
+                ),
+                center = coreCenter,
+                radius = coreRadius
+            ),
+            blendMode = BlendMode.DstIn
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                colorStops = arrayOf(
+                    0.0f to Color.White.copy(alpha = 0.0f),
+                    0.14f to Color.White.copy(alpha = 0.86f),
+                    0.24f to Color.White.copy(alpha = 1.0f),
+                    0.92f to Color.White.copy(alpha = 1.0f),
+                    1.0f to Color.White.copy(alpha = 0.0f)
+                ),
+                startY = 0f,
+                endY = height
+            ),
+            blendMode = BlendMode.DstIn
+        )
+        drawContext.canvas.restore()
+
+        val vignetteColors = arrayOf(
+            0.56f to Color.Transparent,
+            0.82f to (
+                if (lightTheme) blendColors(c0, Color.White, 0.98f) else blendColors(c0, Color.Black, 0.86f)
+                ).copy(alpha = if (lightTheme) 0.015f else 0.028f),
+            1.0f to (
+                if (lightTheme) blendColors(c3, Color.White, 0.995f) else blendColors(c3, Color.Black, 0.94f)
+                ).copy(alpha = if (lightTheme) 0.040f else 0.12f)
+        )
+        drawRect(
+            brush = Brush.radialGradient(
+                colorStops = vignetteColors,
+                center = coreCenter,
+                radius = coreRadius
+            )
+        )
     }
+}
+
+private fun DrawScope.buildWaveContourPath(
+    index: Int,
+    ringCount: Int,
+    pulseSeed: Float,
+    variant: Float
+): Path {
+    val width = size.width
+    val height = size.height
+    val count = max(1f, (ringCount - 1).toFloat())
+    val progress = index / count
+    val tau = (Math.PI * 2.0).toFloat()
+    val phase = (pulseSeed.coerceIn(0f, 1f) * tau) + (variant * 0.86f) + (progress * 1.15f)
+
+    val centerX = (width * 0.50f) + (sin((phase * 0.72f).toDouble()).toFloat() * width * 0.018f)
+    val centerY = (height * 0.53f) + (cos(((phase * 0.54f) + 0.6f).toDouble()).toFloat() * height * 0.022f)
+    val radiusX = width * (0.17f + (progress * 0.23f))
+    val radiusY = height * (0.13f + (progress * 0.17f))
+    val amplitude = min(width, height) * (0.014f + (progress * 0.010f))
+    val pointCount = 56
+
+    return Path().apply {
+        for (point in 0..pointCount) {
+            val angle = (point / pointCount.toFloat()) * tau
+            val wobbleA = sin(((angle * 2.0f) + phase).toDouble()).toFloat() * amplitude
+            val wobbleB = cos(((angle * 3.0f) - (phase * 0.74f)).toDouble()).toFloat() * amplitude * 0.54f
+            val wobbleC = sin(((angle * 5.0f) + (phase * 1.12f)).toDouble()).toFloat() * amplitude * 0.20f
+            val x = centerX + (cos(angle.toDouble()).toFloat() * (radiusX + wobbleA + wobbleB))
+            val y = centerY + (sin(angle.toDouble()).toFloat() * (radiusY + (wobbleA * 0.72f) - (wobbleB * 0.16f) + wobbleC))
+            if (point == 0) {
+                moveTo(x, y)
+            } else {
+                lineTo(x, y)
+            }
+        }
+        close()
+    }
+}
+
+private fun waveGradientRadius(size: Size, center: Offset): Float {
+    val dx = max(center.x, size.width - center.x)
+    val dy = max(center.y, size.height - center.y)
+    return sqrt((dx * dx) + (dy * dy)).coerceAtLeast(1f)
+}
+
+private fun waveContourVariant(cycle: Float): Float {
+    val normalized = waveWrap01(cycle)
+    return when {
+        normalized < 0.34f -> normalized / 0.34f
+        normalized < 0.68f -> 1.0f + ((normalized - 0.34f) / 0.34f)
+        else -> 2.0f - (((normalized - 0.68f) / 0.32f) * 2.0f)
+    }
+}
+
+private fun waveKeyframedValue(
+    cycle: Float,
+    firstStop: Float,
+    secondStop: Float,
+    v0: Float,
+    v1: Float,
+    v2: Float,
+    v3: Float
+): Float {
+    val normalized = waveWrap01(cycle)
+    return when {
+        normalized < firstStop -> lerp(v0, v1, normalized / firstStop.coerceAtLeast(0.0001f))
+        normalized < secondStop -> lerp(v1, v2, (normalized - firstStop) / (secondStop - firstStop).coerceAtLeast(0.0001f))
+        else -> lerp(v2, v3, (normalized - secondStop) / (1.0f - secondStop).coerceAtLeast(0.0001f))
+    }
+}
+
+private fun waveAutoReverseValue(time: Float, duration: Float, from: Float, to: Float): Float {
+    val cycle = waveWrap01(time / duration.coerceAtLeast(0.0001f))
+    val eased = 0.5f - (cos((cycle * (Math.PI * 2.0)).toFloat()) * 0.5f)
+    return lerp(from, to, eased)
+}
+
+private fun waveWrap01(value: Float): Float {
+    val wrapped = value % 1.0f
+    return if (wrapped < 0.0f) wrapped + 1.0f else wrapped
+}
+
+private fun lerp(start: Float, end: Float, fraction: Float): Float {
+    val t = fraction.coerceIn(0f, 1f)
+    return start + ((end - start) * t)
 }
 
 @Composable
