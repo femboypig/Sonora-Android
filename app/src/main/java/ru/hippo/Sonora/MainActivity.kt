@@ -6511,31 +6511,41 @@ private fun MyWaveContoursBackground(
                 size.minDimension * (0.014f + (progress * 0.010f)) *
                     (if (isPlaying) 1.0f else 0.82f) *
                     (1.0f + (((compression * 0.16f) + (neighborPush * 0.10f)) * envelope))
-            val pointCount = if (isPlaying) 30 else 26
+            val pointCount = if (isPlaying) 38 else 34
+            val contourPoints = ArrayList<Offset>(pointCount)
+            for (point in 0 until pointCount) {
+                val angle = (point / pointCount.toFloat()) * tau
+                val wobbleA =
+                    sin((((angle * 2f) + ringPhase) + (neighborPush * 0.52f) + (macroA * 0.14f)).toDouble())
+                        .toFloat() * amplitude
+                val wobbleB =
+                    cos((((angle * 3f) - (ringPhase * 0.74f)) + (compression * 0.36f) + (macroB * 0.10f)).toDouble())
+                        .toFloat() * amplitude * 0.54f
+                val wobbleC =
+                    sin((((angle * 5f) + (ringPhase * 1.12f)) + (neighborPush * 0.24f) + (macroC * 0.08f)).toDouble())
+                        .toFloat() * amplitude * 0.20f
+                val orbitX = cos(angle.toDouble()).toFloat() * (radiusX + wobbleA + wobbleB)
+                val orbitY = sin(angle.toDouble()).toFloat() * (radiusY + (wobbleA * 0.72f) - (wobbleB * 0.16f) + wobbleC)
+                contourPoints += Offset(ringCenterX + orbitX, ringCenterY + orbitY)
+            }
 
             val contour = Path().apply {
-                for (point in 0..pointCount) {
-                    val angle = (point / pointCount.toFloat()) * tau
-                    val wobbleA =
-                        sin((((angle * 2f) + ringPhase) + (neighborPush * 0.52f) + (macroA * 0.14f)).toDouble())
-                            .toFloat() * amplitude
-                    val wobbleB =
-                        cos((((angle * 3f) - (ringPhase * 0.74f)) + (compression * 0.36f) + (macroB * 0.10f)).toDouble())
-                            .toFloat() * amplitude * 0.54f
-                    val wobbleC =
-                        sin((((angle * 5f) + (ringPhase * 1.12f)) + (neighborPush * 0.24f) + (macroC * 0.08f)).toDouble())
-                            .toFloat() * amplitude * 0.20f
-                    val orbitX = cos(angle.toDouble()).toFloat() * (radiusX + wobbleA + wobbleB)
-                    val orbitY = sin(angle.toDouble()).toFloat() * (radiusY + (wobbleA * 0.72f) - (wobbleB * 0.16f) + wobbleC)
-                    val x = ringCenterX + orbitX
-                    val y = ringCenterY + orbitY
-                    if (point == 0) {
-                        moveTo(x, y)
-                    } else {
-                        lineTo(x, y)
+                if (contourPoints.isNotEmpty()) {
+                    val firstMid = Offset(
+                        (contourPoints.last().x + contourPoints.first().x) * 0.5f,
+                        (contourPoints.last().y + contourPoints.first().y) * 0.5f
+                    )
+                    moveTo(firstMid.x, firstMid.y)
+                    contourPoints.forEachIndexed { pointIndex, current ->
+                        val next = contourPoints[(pointIndex + 1) % contourPoints.size]
+                        val mid = Offset(
+                            (current.x + next.x) * 0.5f,
+                            (current.y + next.y) * 0.5f
+                        )
+                        quadraticBezierTo(current.x, current.y, mid.x, mid.y)
                     }
+                    close()
                 }
-                close()
             }
 
             val base = linePalette[index % linePalette.size]
