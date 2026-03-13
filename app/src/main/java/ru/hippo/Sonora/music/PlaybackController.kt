@@ -585,6 +585,13 @@ class PlaybackController(
             return null
         }
 
+        if (automatic && !isShuffleEnabled && repeatMode == RepeatMode.None && currentIndex in queue.indices) {
+            val directNext = currentIndex + 1
+            if (directNext <= queue.lastIndex) {
+                return directNext
+            }
+        }
+
         val navigationIndex = navigationAnchorIndex()
         if (navigationIndex < 0) {
             return 0
@@ -1189,7 +1196,7 @@ class PlaybackController(
             putString(MediaMetadata.METADATA_KEY_TITLE, displayTitle(track))
             putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
             putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs())
-            cachedArtworkBitmap(track)?.let { putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
+            externalArtworkBitmap(track)?.let { putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
         }.build()
         requestArtworkLoad(track)
 
@@ -1245,7 +1252,7 @@ class PlaybackController(
             .setContentText(track.artist.ifBlank { "Unknown Artist" })
             .setContentIntent(contentIntent)
             .setDeleteIntent(actionPendingIntent(ACTION_STOP))
-            .setLargeIcon(cachedArtworkBitmap(track))
+            .setLargeIcon(externalArtworkBitmap(track))
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -1275,6 +1282,10 @@ class PlaybackController(
 
     private fun cachedArtworkBitmap(track: TrackItem): Bitmap? {
         return artworkCache[track.id]
+    }
+
+    private fun externalArtworkBitmap(track: TrackItem): Bitmap? {
+        return squareArtworkBitmap(cachedArtworkBitmap(track))
     }
 
     private fun requestArtworkLoad(track: TrackItem) {
@@ -1351,6 +1362,22 @@ class PlaybackController(
                 // no-op
             }
         }
+    }
+
+    private fun squareArtworkBitmap(bitmap: Bitmap?): Bitmap? {
+        bitmap ?: return null
+        val side = minOf(bitmap.width, bitmap.height)
+        if (side <= 1) {
+            return bitmap
+        }
+        if (bitmap.width == side && bitmap.height == side) {
+            return bitmap
+        }
+        val offsetX = (bitmap.width - side) / 2
+        val offsetY = (bitmap.height - side) / 2
+        return runCatching {
+            Bitmap.createBitmap(bitmap, offsetX, offsetY, side, side)
+        }.getOrElse { bitmap }
     }
 
     private fun displayTitle(track: TrackItem): String {
