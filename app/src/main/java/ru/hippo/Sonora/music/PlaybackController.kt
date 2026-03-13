@@ -667,49 +667,57 @@ class PlaybackController(
         updateExternalState()
 
         val source = track.filePath.trim()
-        if (source.startsWith("http://", ignoreCase = true) ||
+        val isRemoteSource = source.startsWith("http://", ignoreCase = true) ||
             source.startsWith("https://", ignoreCase = true)
-        ) {
-            val httpFactory = DefaultHttpDataSource.Factory()
-                .setUserAgent(REMOTE_STREAM_USER_AGENT)
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(40_000)
-                .setReadTimeoutMs(600_000)
-            val remotePlayer = try {
+        val sourceUri = if (isRemoteSource) {
+            Uri.parse(source)
+        } else {
+            Uri.fromFile(File(source))
+        }
+        val exoPlaybackPlayer = try {
+            if (isRemoteSource) {
+                val httpFactory = DefaultHttpDataSource.Factory()
+                    .setUserAgent(REMOTE_STREAM_USER_AGENT)
+                    .setAllowCrossProtocolRedirects(true)
+                    .setConnectTimeoutMs(40_000)
+                    .setReadTimeoutMs(600_000)
                 ExoPlayer.Builder(appContext)
                     .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
                     .build()
-            } catch (_: Exception) {
-                null
+            } else {
+                ExoPlayer.Builder(appContext).build()
             }
+        } catch (_: Exception) {
+            null
+        }
 
-            if (remotePlayer == null) {
-                if (restorePendingSkipRollback()) {
-                    return true
-                }
-                clearPendingTrackTarget()
-                clearPendingSkippedTrack()
-                playerPrepared = false
-                pendingPlayWhenPrepared = false
-                isPreparing = false
-                isPlaying = false
-                updateExternalState()
-                return false
+        if (exoPlaybackPlayer == null) {
+            if (restorePendingSkipRollback()) {
+                return true
             }
+            clearPendingTrackTarget()
+            clearPendingSkippedTrack()
+            playerPrepared = false
+            pendingPlayWhenPrepared = false
+            isPreparing = false
+            isPlaying = false
+            updateExternalState()
+            return false
+        }
 
-            var readyHandled = false
-            remotePlayer.setAudioAttributes(
-                Media3AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build(),
-                true
-            )
-            remotePlayer.playWhenReady = pendingPlayWhenPrepared
-            remotePlayer.addListener(object : Player.Listener {
+        var readyHandled = false
+        exoPlaybackPlayer.setAudioAttributes(
+            Media3AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build(),
+            true
+        )
+        exoPlaybackPlayer.playWhenReady = pendingPlayWhenPrepared
+        exoPlaybackPlayer.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playRequestToken != requestToken || exoPlayer !== remotePlayer) {
-                        runCatching { remotePlayer.release() }
+                    if (playRequestToken != requestToken || exoPlayer !== exoPlaybackPlayer) {
+                        runCatching { exoPlaybackPlayer.release() }
                         return
                     }
                     when (playbackState) {
@@ -720,12 +728,12 @@ class PlaybackController(
                                 playerPrepared = true
                                 isPreparing = false
                                 val pendingSeek = pendingSeekPositionMs
-                                if (pendingSeek >= 0L && remotePlayer.duration > 0L) {
-                                    remotePlayer.seekTo(pendingSeek.coerceIn(0L, remotePlayer.duration))
+                                if (pendingSeek >= 0L && exoPlaybackPlayer.duration > 0L) {
+                                    exoPlaybackPlayer.seekTo(pendingSeek.coerceIn(0L, exoPlaybackPlayer.duration))
                                 }
                                 dispatchPendingSkippedTrack(currentTrackId)
                                 if (pendingPlayWhenPrepared) {
-                                    remotePlayer.playWhenReady = true
+                                    exoPlaybackPlayer.playWhenReady = true
                                     this@PlaybackController.isPlaying = true
                                     onTrackPlayed(track.id)
                                 } else {
@@ -746,7 +754,7 @@ class PlaybackController(
                 }
 
                 override fun onIsPlayingChanged(isPlayingNow: Boolean) {
-                    if (playRequestToken == requestToken && exoPlayer === remotePlayer) {
+                    if (playRequestToken == requestToken && exoPlayer === exoPlaybackPlayer) {
                         if (isPreparing && pendingPlayWhenPrepared && !isPlayingNow) {
                             updateExternalState()
                             return
@@ -757,7 +765,7 @@ class PlaybackController(
                 }
 
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    if (playRequestToken == requestToken && exoPlayer === remotePlayer) {
+                    if (playRequestToken == requestToken && exoPlayer === exoPlaybackPlayer) {
                         if (restorePendingSkipRollback()) {
                             return
                         }
@@ -776,97 +784,9 @@ class PlaybackController(
                     }
                 }
             })
-            exoPlayer = remotePlayer
-            remotePlayer.setMediaItem(MediaItem.fromUri(Uri.parse(source)))
-            remotePlayer.prepare()
-            return true
-        }
-
-        val player = try {
-            MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK)
-                setOnPreparedListener { preparedPlayer ->
-                    if (playRequestToken != requestToken || mediaPlayer !== preparedPlayer) {
-                        runCatching { preparedPlayer.release() }
-                        return@setOnPreparedListener
-                    }
-                    commitPreparedTrack(index, track.id)
-                    playerPrepared = true
-                    isPreparing = false
-                    val pendingSeek = pendingSeekPositionMs
-                    if (pendingSeek >= 0L && preparedPlayer.duration > 0) {
-                        preparedPlayer.seekTo(pendingSeek.coerceIn(0L, preparedPlayer.duration.toLong()).toInt())
-                    }
-                    dispatchPendingSkippedTrack(currentTrackId)
-                    if (pendingPlayWhenPrepared) {
-                        preparedPlayer.start()
-                        this@PlaybackController.isPlaying = true
-                        onTrackPlayed(track.id)
-                    } else {
-                        this@PlaybackController.isPlaying = false
-                    }
-                    snapshotCurrentTrackState(
-                        positionMs = pendingSeek.takeIf { it >= 0L } ?: 0L,
-                        shouldResumePlaying = pendingPlayWhenPrepared
-                    )?.let { lastPreparedTrackState = it }
-                    pendingSkipRollback = null
-                    updateExternalState()
-                }
-                setDataSource(source)
-                setOnCompletionListener {
-                    if (playRequestToken == requestToken) {
-                        handleTrackCompleted()
-                    }
-                }
-                setOnErrorListener { failedPlayer, _, _ ->
-                    if (playRequestToken == requestToken && mediaPlayer === failedPlayer) {
-                        if (restorePendingSkipRollback()) {
-                            return@setOnErrorListener true
-                        }
-                        val failedTrackId = pendingTrackId ?: currentTrackId
-                        clearPendingTrackTarget()
-                        clearPendingSkippedTrack()
-                        playerPrepared = false
-                        pendingPlayWhenPrepared = false
-                        isPreparing = false
-                        stopPlayer()
-                        this@PlaybackController.isPlaying = false
-                        updateExternalState()
-                        if (!failedTrackId.isNullOrBlank()) {
-                            onTrackPlaybackFailed(failedTrackId)
-                        }
-                    } else {
-                        runCatching { failedPlayer.release() }
-                    }
-                    true
-                }
-                setVolume(1.0f, 1.0f)
-            }
-        } catch (_: Exception) {
-            null
-        }
-
-        if (player == null) {
-            if (restorePendingSkipRollback()) {
-                return true
-            }
-            clearPendingTrackTarget()
-            clearPendingSkippedTrack()
-            playerPrepared = false
-            pendingPlayWhenPrepared = false
-            isPreparing = false
-            isPlaying = false
-            updateExternalState()
-            return false
-        }
-        mediaPlayer = player
-        player.prepareAsync()
+        exoPlayer = exoPlaybackPlayer
+        exoPlaybackPlayer.setMediaItem(MediaItem.fromUri(sourceUri))
+        exoPlaybackPlayer.prepare()
         return true
     }
 
