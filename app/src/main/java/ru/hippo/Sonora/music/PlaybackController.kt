@@ -480,7 +480,18 @@ class PlaybackController(
         cancelPendingAutoNext()
         captureSkipRollbackState()?.let { pendingSkipRollback = it }
         val skippedTrackId = currentTrackId
-        val advanced = playNextInternal(automatic = false)
+        val nextIndex = resolveUserNextIndex()
+        val advanced = if (nextIndex != null) {
+            if (isShuffleEnabled) {
+                val navigationIndex = userNavigationAnchorIndex()
+                if (navigationIndex >= 0 && nextIndex != navigationIndex) {
+                    shuffleHistory.addLast(navigationIndex)
+                }
+            }
+            playAt(nextIndex)
+        } else {
+            false
+        }
         if (!advanced) {
             pendingSkipRollback = null
             clearPendingSkippedTrack()
@@ -494,7 +505,7 @@ class PlaybackController(
         cancelPendingAutoNext()
         captureSkipRollbackState()?.let { pendingSkipRollback = it }
         val skippedTrackId = currentTrackId
-        val rewound = playPreviousInternal()
+        val rewound = playPreviousFromUserInternal()
         if (!rewound) {
             pendingSkipRollback = null
             clearPendingSkippedTrack()
@@ -580,6 +591,33 @@ class PlaybackController(
         return restartCurrentTrack()
     }
 
+    private fun playPreviousFromUserInternal(): Boolean {
+        if (queue.isEmpty()) {
+            return false
+        }
+
+        if (isShuffleEnabled && shuffleHistory.isNotEmpty()) {
+            val previous = shuffleHistory.removeLast()
+            val navigationIndex = userNavigationAnchorIndex()
+            if (navigationIndex >= 0 && navigationIndex != previous) {
+                shuffleBag.addFirst(navigationIndex)
+            }
+            return playAt(previous)
+        }
+
+        val anchorIndex = userNavigationAnchorIndex()
+        val previousIndex = anchorIndex - 1
+        if (previousIndex >= 0) {
+            return playAt(previousIndex)
+        }
+
+        if (repeatMode == RepeatMode.Queue && queue.isNotEmpty()) {
+            return playAt(queue.lastIndex)
+        }
+
+        return restartCurrentTrack()
+    }
+
     private fun resolveNextIndex(automatic: Boolean): Int? {
         if (queue.isEmpty()) {
             return null
@@ -644,18 +682,39 @@ class PlaybackController(
         return if (repeatMode == RepeatMode.Queue) 0 else null
     }
 
-    private fun nextShuffleIndex(): Int? {
+    private fun resolveUserNextIndex(): Int? {
         if (queue.isEmpty()) {
             return null
         }
 
-        val navigationIndex = navigationAnchorIndex()
+        val anchorIndex = userNavigationAnchorIndex()
+        if (anchorIndex < 0) {
+            return queue.indices.firstOrNull()
+        }
+
+        if (isShuffleEnabled) {
+            return nextShuffleIndex(anchorIndex)
+        }
+
+        val next = anchorIndex + 1
+        if (next <= queue.lastIndex) {
+            return next
+        }
+
+        return if (repeatMode == RepeatMode.Queue) 0 else null
+    }
+
+    private fun nextShuffleIndex(anchorIndex: Int = navigationAnchorIndex()): Int? {
+        if (queue.isEmpty()) {
+            return null
+        }
+
         if (queue.size == 1) {
             return if (repeatMode == RepeatMode.None) null else 0
         }
 
         if (shuffleBag.isEmpty()) {
-            refillShuffleBag(excluding = navigationIndex)
+            refillShuffleBag(excluding = anchorIndex)
         }
 
         val next = shuffleBag.removeFirstOrNull()
@@ -664,7 +723,7 @@ class PlaybackController(
         }
 
         if (repeatMode == RepeatMode.Queue) {
-            refillShuffleBag(excluding = navigationIndex)
+            refillShuffleBag(excluding = anchorIndex)
             return shuffleBag.removeFirstOrNull()
         }
 
@@ -1076,6 +1135,20 @@ class PlaybackController(
             return stable.index
         }
         return pendingTrackIndex
+    }
+
+    private fun userNavigationAnchorIndex(): Int {
+        if (pendingTrackIndex in queue.indices) {
+            return pendingTrackIndex
+        }
+        if (currentIndex in queue.indices) {
+            return currentIndex
+        }
+        val stable = lastPreparedTrackState
+        if (stable != null && stable.index in queue.indices && queue.getOrNull(stable.index)?.id == stable.trackId) {
+            return stable.index
+        }
+        return -1
     }
 
     private fun restorePendingSkipRollback(): Boolean {
