@@ -776,9 +776,9 @@ class PlaybackController(
                     }
                 }
             })
+            exoPlayer = remotePlayer
             remotePlayer.setMediaItem(MediaItem.fromUri(Uri.parse(source)))
             remotePlayer.prepare()
-            exoPlayer = remotePlayer
             return true
         }
 
@@ -846,7 +846,6 @@ class PlaybackController(
                     }
                     true
                 }
-                prepareAsync()
                 setVolume(1.0f, 1.0f)
             }
         } catch (_: Exception) {
@@ -866,8 +865,8 @@ class PlaybackController(
             updateExternalState()
             return false
         }
-
         mediaPlayer = player
+        player.prepareAsync()
         return true
     }
 
