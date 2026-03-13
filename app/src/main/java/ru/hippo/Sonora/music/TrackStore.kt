@@ -224,7 +224,12 @@ class TrackStore(private val context: Context) {
             return null
         }
 
-        val fileExtension = sanitizeExtension(suggestedName.substringAfterLast('.', "jpg"))
+        val preparedBytes = squareArtworkBytes(bytes) ?: bytes
+        val fileExtension = if (preparedBytes === bytes) {
+            sanitizeExtension(suggestedName.substringAfterLast('.', "jpg"))
+        } else {
+            "jpg"
+        }
         val outputFile = File(
             artworkDir,
             "art_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.$fileExtension"
@@ -232,7 +237,7 @@ class TrackStore(private val context: Context) {
 
         return try {
             outputFile.outputStream().use { output ->
-                output.write(bytes)
+                output.write(preparedBytes)
                 output.flush()
             }
             outputFile.absolutePath
@@ -267,11 +272,15 @@ class TrackStore(private val context: Context) {
         return try {
             val mp3File = Mp3File(sourceFile.absolutePath)
             val tag = (mp3File.id3v2Tag as? ID3v24Tag) ?: ID3v24Tag()
-            if (preferredTitle.isNotBlank()) {
-                tag.title = preferredTitle
+            val resolvedTitle = preferredTitle.trim()
+            val resolvedArtist = sanitizeDownloadedArtist(preferredArtist)
+            if (resolvedTitle.isNotBlank()) {
+                tag.title = resolvedTitle
             }
-            if (preferredArtist.isNotBlank()) {
-                tag.artist = preferredArtist
+            if (resolvedArtist.isNotBlank()) {
+                tag.artist = resolvedArtist
+                setOptionalId3v2StringField(tag, "setAlbumArtist", resolvedArtist)
+                setOptionalId3v2StringField(tag, "setOriginalArtist", resolvedArtist)
             }
             if (preferredArtwork != null && preferredArtwork.isNotEmpty()) {
                 val squaredArtwork = squareArtworkBytes(preferredArtwork)
@@ -330,6 +339,37 @@ class TrackStore(private val context: Context) {
             output.toByteArray().takeIf { it.isNotEmpty() } ?: bytes
         } catch (_: Exception) {
             bytes
+        }
+    }
+
+    private fun sanitizeDownloadedArtist(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) {
+            return ""
+        }
+
+        val suffix = listOf(" - Topic", " – Topic", " — Topic")
+            .firstOrNull { candidate -> trimmed.lowercase().endsWith(candidate.lowercase()) }
+        return if (suffix != null && trimmed.length > suffix.length) {
+            trimmed.dropLast(suffix.length).trim()
+        } else {
+            trimmed
+        }
+    }
+
+    private fun setOptionalId3v2StringField(tag: ID3v24Tag, methodName: String, value: String) {
+        if (value.isBlank()) {
+            return
+        }
+
+        runCatching {
+            tag.javaClass.methods
+                .firstOrNull { method ->
+                    method.name == methodName &&
+                        method.parameterTypes.size == 1 &&
+                        method.parameterTypes[0] == String::class.java
+                }
+                ?.invoke(tag, value)
         }
     }
 
@@ -490,6 +530,7 @@ class TrackStore(private val context: Context) {
             return null
         }
 
+        val preparedBytes = squareArtworkBytes(bytes) ?: bytes
         val artworkFile = File(
             artworkDir,
             "art_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.jpg"
@@ -497,7 +538,7 @@ class TrackStore(private val context: Context) {
 
         return try {
             artworkFile.outputStream().use { output ->
-                output.write(bytes)
+                output.write(preparedBytes)
                 output.flush()
             }
             artworkFile.absolutePath

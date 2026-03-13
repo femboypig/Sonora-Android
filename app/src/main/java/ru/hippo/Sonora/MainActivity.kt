@@ -2252,7 +2252,20 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         }
 
         val preferredTitle = track.title.ifBlank { payload.title.ifBlank { "Track" } }
+            .trim()
+            .ifBlank { "Track" }
         val preferredArtist = track.artists.ifBlank { payload.artist.ifBlank { "Spotify" } }
+            .trim()
+            .let { rawArtist ->
+                val suffix = listOf(" - Topic", " – Topic", " — Topic")
+                    .firstOrNull { candidate -> rawArtist.lowercase().endsWith(candidate.lowercase()) }
+                if (suffix != null && rawArtist.length > suffix.length) {
+                    rawArtist.dropLast(suffix.length).trim()
+                } else {
+                    rawArtist
+                }
+            }
+            .ifBlank { "Spotify" }
         val preferredArtworkUrl = track.artworkUrl.ifBlank { payload.artworkUrl }
         val isYoutubeEngine = appSettings.streamingSearchEngine == StreamingSearchEngine.YouTube
         val importedArtworkPath = withContext(Dispatchers.IO) {
