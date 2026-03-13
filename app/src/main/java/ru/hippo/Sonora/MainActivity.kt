@@ -781,6 +781,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val miniStreamingResolvingJobs = remember { mutableMapOf<String, Job>() }
     var miniStreamingPlaybackQueue by remember { mutableStateOf<List<MiniStreamingTrack>>(emptyList()) }
     var miniStreamingActiveTrackId by rememberSaveable { mutableStateOf<String?>(null) }
+    var miniStreamingPendingFavoriteTrackIds by remember { mutableStateOf(setOf<String>()) }
     var miniStreamingResolvedPayloadByTrackId by remember {
         mutableStateOf<Map<String, MiniStreamingDownloadPayload>>(emptyMap())
     }
@@ -1941,6 +1942,14 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         settingsStore.saveMiniStreamingInstalledTrackMap(updatedMap)
     }
 
+    fun isMiniStreamingTrackFavorited(trackId: String): Boolean {
+        val localTrackId = miniStreamingInstalledTrackMap[trackId]
+        if (!localTrackId.isNullOrBlank()) {
+            tracks.firstOrNull { it.id == localTrackId }?.let { return it.isFavorite }
+        }
+        return miniStreamingPendingFavoriteTrackIds.contains(trackId)
+    }
+
     fun miniStreamingPlaybackTrackFor(
         track: MiniStreamingTrack,
         payload: MiniStreamingDownloadPayload?
@@ -1976,7 +1985,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             filePath = source,
             artworkPath = track.artworkUrl.ifBlank { payload?.artworkUrl.orEmpty() },
             addedAt = System.currentTimeMillis(),
-            isFavorite = false
+            isFavorite = isMiniStreamingTrackFavorited(track.trackId)
         )
     }
 
@@ -2278,7 +2287,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             filePath = destination.absolutePath,
             artworkPath = importedArtworkPath ?: preferredArtworkUrl,
             addedAt = System.currentTimeMillis(),
-            isFavorite = false
+            isFavorite = isMiniStreamingTrackFavorited(track.trackId)
         )
 
         val deduped = tracks.filterNot { item ->
@@ -2289,6 +2298,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         val updated = listOf(newTrack) + deduped
         persistTracks(updated)
         rememberInstalledMiniStreamingTrack(track.trackId, newTrack.id)
+        miniStreamingPendingFavoriteTrackIds = miniStreamingPendingFavoriteTrackIds - track.trackId
         refreshMiniStreamingQueueInPlayer()
         return newTrack
     }
@@ -2331,22 +2341,6 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             val installed = installMiniStreamingTrackToLibrary(track, payload)
             if (installed == null && showErrorMessage) {
                 snackbarHostState.showSnackbar("Install failed for ${track.title}")
-            } else if (installed != null && miniStreamingActiveTrackId == track.trackId) {
-                val targetPlaybackId = miniStreamingPlaybackIdForTrack(track.trackId)
-                val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
-                val currentPlaybackId = playbackController.currentTrackId
-                val currentPlaybackPath = playbackController.currentTrack?.filePath.orEmpty()
-                val shouldForceLocalStart =
-                    currentPlaybackId == null ||
-                        currentPlaybackId == targetPlaybackId ||
-                        currentPlaybackPath.startsWith("http://", ignoreCase = true) ||
-                        currentPlaybackPath.startsWith("https://", ignoreCase = true) ||
-                        !playbackController.isPlaying
-                if (shouldForceLocalStart && playbackQueue.any { it.id == targetPlaybackId }) {
-                    playbackController.stop()
-                    playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
-                    playerVisible = true
-                }
             }
         }
         miniStreamingInstallingJobs[track.trackId] = installJob
@@ -2417,7 +2411,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             filePath = "",
             artworkPath = track.artworkUrl,
             addedAt = System.currentTimeMillis(),
-            isFavorite = false
+            isFavorite = isMiniStreamingTrackFavorited(track.trackId)
         )
         playerVisible = true
         playbackController.stop()
@@ -2507,7 +2501,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 filePath = "",
                 artworkPath = queueTrack.artworkUrl.ifBlank { payload?.artworkUrl.orEmpty() },
                 addedAt = System.currentTimeMillis(),
-                isFavorite = false
+                isFavorite = isMiniStreamingTrackFavorited(miniTrackId)
             )
             miniStreamingActiveTrackId = miniTrackId
             playerVisible = true
@@ -2544,7 +2538,36 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         }
     }
 
-    val onFavoriteToggle: (String) -> Unit = { trackID ->
+    val onFavoriteToggle: (String) -> Unit = favoriteToggle@ { trackID ->
+        val miniTrackId = miniStreamingTrackIdFromPlaybackId(trackID)
+        if (!miniTrackId.isNullOrBlank()) {
+            val installedLocalTrackId = miniStreamingInstalledTrackMap[miniTrackId]
+            if (!installedLocalTrackId.isNullOrBlank()) {
+                val updatedInstalled = tracks.map { track ->
+                    if (track.id == installedLocalTrackId) {
+                        track.copy(isFavorite = !track.isFavorite)
+                    } else {
+                        track
+                    }
+                }
+                persistTracks(updatedInstalled)
+            } else {
+                val shouldFavorite = !miniStreamingPendingFavoriteTrackIds.contains(miniTrackId)
+                miniStreamingPendingFavoriteTrackIds = if (shouldFavorite) {
+                    miniStreamingPendingFavoriteTrackIds + miniTrackId
+                } else {
+                    miniStreamingPendingFavoriteTrackIds - miniTrackId
+                }
+                miniStreamingPendingTrack = miniStreamingPendingTrack?.let { pending ->
+                    if (pending.id == trackID) {
+                        pending.copy(isFavorite = shouldFavorite)
+                    } else {
+                        pending
+                    }
+                }
+            }
+            return@favoriteToggle
+        }
         val updated = tracks.map { track ->
             if (track.id == trackID) {
                 track.copy(isFavorite = !track.isFavorite)
@@ -4211,8 +4234,12 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
 
             val playerTrack = playbackController.displayTrack ?: miniStreamingPendingTrack
             if (playerVisible && playerTrack != null) {
-                val isFavorite = tracks.firstOrNull { it.id == playerTrack.id }?.isFavorite
-                    ?: playerTrack.isFavorite
+                val playerMiniTrackId = miniStreamingTrackIdFromPlaybackId(playerTrack.id)
+                val isFavorite = if (!playerMiniTrackId.isNullOrBlank()) {
+                    isMiniStreamingTrackFavorited(playerMiniTrackId)
+                } else {
+                    tracks.firstOrNull { it.id == playerTrack.id }?.isFavorite ?: playerTrack.isFavorite
+                }
                     PlayerView(
                         modifier = Modifier.fillMaxSize(),
                         track = playerTrack,
@@ -4237,11 +4264,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                     onToggleShuffle = { playbackController.toggleShuffleEnabled() },
                     onCycleRepeat = { playbackController.cycleRepeatMode() },
                     onSleepTimerTap = { showSleepTimerDialog = true },
-                    onToggleFavorite = {
-                        if (!playerTrack.id.startsWith(MINI_STREAMING_PLAYBACK_PREFIX)) {
-                            onFavoriteToggle(playerTrack.id)
-                        }
-                    },
+                    onToggleFavorite = { onFavoriteToggle(playerTrack.id) },
                     onSeek = { positionMs -> playbackController.seekTo(positionMs) },
                     positionMsProvider = { playbackController.currentPositionMs() },
                     durationMsProvider = { playbackController.durationMs() }
