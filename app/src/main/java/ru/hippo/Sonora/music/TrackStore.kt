@@ -1,6 +1,8 @@
 package ru.hippo.Sonora.music
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -8,6 +10,7 @@ import com.mpatric.mp3agic.ID3v24Tag
 import com.mpatric.mp3agic.Mp3File
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -271,7 +274,10 @@ class TrackStore(private val context: Context) {
                 tag.artist = preferredArtist
             }
             if (preferredArtwork != null && preferredArtwork.isNotEmpty()) {
-                tag.setAlbumImage(preferredArtwork, "image/jpeg")
+                val squaredArtwork = squareArtworkBytes(preferredArtwork)
+                if (squaredArtwork != null && squaredArtwork.isNotEmpty()) {
+                    tag.setAlbumImage(squaredArtwork, "image/jpeg")
+                }
             }
             mp3File.id3v2Tag = tag
             mp3File.save(tempFile.absolutePath)
@@ -289,6 +295,41 @@ class TrackStore(private val context: Context) {
                 tempFile.delete()
             }
             false
+        }
+    }
+
+    private fun squareArtworkBytes(bytes: ByteArray): ByteArray? {
+        if (bytes.isEmpty()) {
+            return null
+        }
+
+        return try {
+            val original = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return bytes
+            val side = minOf(original.width, original.height)
+            if (side <= 1) {
+                return bytes
+            }
+
+            val squared = if (original.width == side && original.height == side) {
+                original
+            } else {
+                Bitmap.createBitmap(
+                    original,
+                    (original.width - side) / 2,
+                    (original.height - side) / 2,
+                    side,
+                    side
+                )
+            }
+
+            val output = ByteArrayOutputStream()
+            val compressed = squared.compress(Bitmap.CompressFormat.JPEG, 94, output)
+            if (!compressed) {
+                return bytes
+            }
+            output.toByteArray().takeIf { it.isNotEmpty() } ?: bytes
+        } catch (_: Exception) {
+            bytes
         }
     }
 
