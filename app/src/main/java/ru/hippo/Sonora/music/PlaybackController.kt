@@ -308,7 +308,7 @@ class PlaybackController(
 
         this.queue = queue
         queueCount = queue.size
-        resetShuffleState()
+        resetShuffleState(anchorIndex = index)
         val started = playAt(index)
         if (started) {
             stagePendingSkippedTrack(skippedTrackId, targetTrackId)
@@ -344,7 +344,7 @@ class PlaybackController(
                 clearPendingTrackTarget()
             }
         }
-        resetShuffleState()
+        resetShuffleState(anchorIndex = nextIndex)
         updateExternalState()
     }
 
@@ -441,7 +441,7 @@ class PlaybackController(
             return
         }
         isShuffleEnabled = enabled
-        resetShuffleState()
+        resetShuffleState(anchorIndex = currentIndex)
         updateExternalState()
     }
 
@@ -677,11 +677,11 @@ class PlaybackController(
         shuffleBag.addAll(candidates)
     }
 
-    private fun resetShuffleState() {
+    private fun resetShuffleState(anchorIndex: Int = currentIndex) {
         shuffleHistory.clear()
         shuffleBag.clear()
         if (isShuffleEnabled && queue.size > 1) {
-            refillShuffleBag(excluding = currentIndex)
+            refillShuffleBag(excluding = anchorIndex)
         }
     }
 
@@ -753,9 +753,6 @@ class PlaybackController(
         isPreparing = true
         if (!shouldAutoPlay) {
             isPlaying = false
-        }
-        if (isShuffleEnabled && queue.size > 1) {
-            refillShuffleBag(excluding = index)
         }
         updateExternalState()
 
@@ -1091,7 +1088,7 @@ class PlaybackController(
         }
         queue = rollback.queue
         queueCount = rollback.queue.size
-        resetShuffleState()
+        resetShuffleState(anchorIndex = rollback.index)
         return playAt(
             index = rollback.index,
             shouldAutoPlay = rollback.shouldResumePlaying,
