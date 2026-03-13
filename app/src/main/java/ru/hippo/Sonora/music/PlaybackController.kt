@@ -113,13 +113,14 @@ class PlaybackController(
             if (!isPreparing) {
                 return currentTrack
             }
+            pendingTrack?.let { return it }
             currentTrack?.let { return it }
             val stableTrackId = lastPreparedTrackState?.trackId
             if (!stableTrackId.isNullOrBlank()) {
                 queue.firstOrNull { it.id == stableTrackId }?.let { return it }
                 lastPreparedTrackState?.queue?.firstOrNull { it.id == stableTrackId }?.let { return it }
             }
-            return pendingTrack
+            return null
         }
 
     val displayTrackId: String?
@@ -1227,7 +1228,7 @@ class PlaybackController(
     }
 
     private fun updateMediaSession() {
-        val track = currentTrack
+        val track = displayTrack ?: currentTrack
         if (track == null) {
             val state = PlaybackState.Builder()
                 .setActions(
@@ -1266,7 +1267,7 @@ class PlaybackController(
             putString(MediaMetadata.METADATA_KEY_TITLE, displayTitle(track))
             putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
             putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs())
-            externalArtworkBitmap(track)?.let { putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
+            resolvedExternalArtworkBitmap(track)?.let { putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it) }
         }.build()
         requestArtworkLoad(track)
 
@@ -1276,7 +1277,7 @@ class PlaybackController(
     }
 
     private fun updateNotification() {
-        val track = currentTrack
+        val track = displayTrack ?: currentTrack
         if (track == null) {
             notificationManager.cancel(NOTIFICATION_ID)
             return
@@ -1322,7 +1323,7 @@ class PlaybackController(
             .setContentText(track.artist.ifBlank { "Unknown Artist" })
             .setContentIntent(contentIntent)
             .setDeleteIntent(actionPendingIntent(ACTION_STOP))
-            .setLargeIcon(externalArtworkBitmap(track))
+            .setLargeIcon(resolvedExternalArtworkBitmap(track))
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -1356,6 +1357,24 @@ class PlaybackController(
 
     private fun externalArtworkBitmap(track: TrackItem): Bitmap? {
         return squareArtworkBitmap(cachedArtworkBitmap(track))
+    }
+
+    private fun resolvedExternalArtworkBitmap(track: TrackItem): Bitmap? {
+        externalArtworkBitmap(track)?.let { return it }
+        val activeTrack = currentTrack
+        if (activeTrack != null && activeTrack.id != track.id) {
+            externalArtworkBitmap(activeTrack)?.let { return it }
+        }
+        val stableTrackId = lastPreparedTrackState?.trackId
+        if (!stableTrackId.isNullOrBlank() && stableTrackId != track.id) {
+            queue.firstOrNull { it.id == stableTrackId }?.let { stableTrack ->
+                externalArtworkBitmap(stableTrack)?.let { return it }
+            }
+            lastPreparedTrackState?.queue?.firstOrNull { it.id == stableTrackId }?.let { stableTrack ->
+                externalArtworkBitmap(stableTrack)?.let { return it }
+            }
+        }
+        return null
     }
 
     private fun requestArtworkLoad(track: TrackItem) {

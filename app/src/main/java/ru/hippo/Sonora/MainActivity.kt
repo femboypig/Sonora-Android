@@ -10180,7 +10180,8 @@ private fun rememberTrackArtwork(
             imageBitmap = null
             return@LaunchedEffect
         }
-        if (imageBitmap != null) {
+        artworkCacheGet(key)?.let { cached ->
+            imageBitmap = cached
             return@LaunchedEffect
         }
         if (artworkMissingCacheContains(key)) {
@@ -10215,7 +10216,8 @@ private fun rememberArtworkByPath(
             imageBitmap = null
             return@LaunchedEffect
         }
-        if (imageBitmap != null) {
+        artworkCacheGet(key)?.let { cached ->
+            imageBitmap = cached
             return@LaunchedEffect
         }
         if (artworkMissingCacheContains(key)) {
