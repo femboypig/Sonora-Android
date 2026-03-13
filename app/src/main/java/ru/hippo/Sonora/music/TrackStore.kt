@@ -348,13 +348,20 @@ class TrackStore(private val context: Context) {
             return ""
         }
 
-        val suffix = listOf(" - Topic", " – Topic", " — Topic")
-            .firstOrNull { candidate -> trimmed.lowercase().endsWith(candidate.lowercase()) }
-        return if (suffix != null && trimmed.length > suffix.length) {
-            trimmed.dropLast(suffix.length).trim()
-        } else {
-            trimmed
-        }
+        return trimmed.split(",")
+            .map { segment ->
+                val trimmedSegment = segment.trim()
+                val suffix = listOf(" - Topic", " – Topic", " — Topic")
+                    .firstOrNull { candidate -> trimmedSegment.lowercase().endsWith(candidate.lowercase()) }
+                if (suffix != null && trimmedSegment.length > suffix.length) {
+                    trimmedSegment.dropLast(suffix.length).trim()
+                } else {
+                    trimmedSegment
+                }
+            }
+            .filter { segment -> segment.isNotBlank() }
+            .joinToString(", ")
+            .ifBlank { trimmed }
     }
 
     private fun setOptionalId3v2StringField(tag: ID3v24Tag, methodName: String, value: String) {

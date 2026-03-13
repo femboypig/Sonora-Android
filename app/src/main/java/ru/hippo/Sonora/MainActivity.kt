@@ -2257,13 +2257,20 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         val preferredArtist = track.artists.ifBlank { payload.artist.ifBlank { "Spotify" } }
             .trim()
             .let { rawArtist ->
-                val suffix = listOf(" - Topic", " – Topic", " — Topic")
-                    .firstOrNull { candidate -> rawArtist.lowercase().endsWith(candidate.lowercase()) }
-                if (suffix != null && rawArtist.length > suffix.length) {
-                    rawArtist.dropLast(suffix.length).trim()
-                } else {
-                    rawArtist
-                }
+                rawArtist.split(",")
+                    .map { segment ->
+                        val trimmedSegment = segment.trim()
+                        val suffix = listOf(" - Topic", " – Topic", " — Topic")
+                            .firstOrNull { candidate -> trimmedSegment.lowercase().endsWith(candidate.lowercase()) }
+                        if (suffix != null && trimmedSegment.length > suffix.length) {
+                            trimmedSegment.dropLast(suffix.length).trim()
+                        } else {
+                            trimmedSegment
+                        }
+                    }
+                    .filter { segment -> segment.isNotBlank() }
+                    .joinToString(", ")
+                    .ifBlank { rawArtist }
             }
             .ifBlank { "Spotify" }
         val preferredArtworkUrl = track.artworkUrl.ifBlank { payload.artworkUrl }

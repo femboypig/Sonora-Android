@@ -55,11 +55,43 @@ private fun preferredYouTubeArtworkUrl(
     fallbackUrl: String,
     engine: String
 ): String {
+    val normalizedFallbackUrl = fallbackUrl.trim()
+    if (normalizedFallbackUrl.isNotBlank()) {
+        return normalizedFallbackUrl
+    }
     val normalizedTrackId = trackId.trim()
     if (engine == "youtube" && normalizedTrackId.length == 11) {
         return "https://i.ytimg.com/vi/$normalizedTrackId/maxresdefault.jpg"
     }
-    return fallbackUrl.trim()
+    return normalizedFallbackUrl
+}
+
+private fun sanitizeYouTubeArtistSegment(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) {
+        return ""
+    }
+
+    val suffix = listOf(" - Topic", " – Topic", " — Topic")
+        .firstOrNull { candidate -> trimmed.lowercase().endsWith(candidate.lowercase()) }
+    return if (suffix != null && trimmed.length > suffix.length) {
+        trimmed.dropLast(suffix.length).trim()
+    } else {
+        trimmed
+    }
+}
+
+private fun sanitizeYouTubeArtists(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) {
+        return ""
+    }
+
+    return trimmed.split(",")
+        .map { segment -> sanitizeYouTubeArtistSegment(segment) }
+        .filter { segment -> segment.isNotBlank() }
+        .joinToString(", ")
+        .ifBlank { sanitizeYouTubeArtistSegment(trimmed) }
 }
 
 class MiniStreamingClient(
@@ -523,7 +555,7 @@ class MiniStreamingClient(
                 node.optString("artistName").trim()
             }.ifBlank {
                 if (normalizedSearchEngine() == "youtube") "YouTube" else "Spotify"
-            },
+            }.let(::sanitizeYouTubeArtists),
             durationMs = parseDurationMsFromItem(node),
             artworkUrl = artwork
         )
@@ -675,6 +707,7 @@ class MiniStreamingClient(
         val artist = data.optString("author")
             .ifBlank { data.optString("artist") }
             .ifBlank { "Spotify" }
+            .let(::sanitizeYouTubeArtists)
         val durationMs = parseDurationToMs(data.optString("duration"))
         val artworkUrl = data.optString("thumbnail")
             .ifBlank { data.optString("cover") }
@@ -704,7 +737,7 @@ class MiniStreamingClient(
         val names = buildList {
             for (index in 0 until items.length()) {
                 val item = items.optJSONObject(index) ?: continue
-                val name = item.optString("name").trim()
+                val name = sanitizeYouTubeArtistSegment(item.optString("name"))
                 if (name.isNotBlank()) {
                     add(name)
                 }
