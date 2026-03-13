@@ -6242,7 +6242,8 @@ private fun HomeMyWaveCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(396.dp)
+            .height(428.dp)
+            .clickable(onClick = onPlayToggle)
     ) {
         HomeMyWaveVisualBackground(
             track = track,
@@ -6271,7 +6272,6 @@ private fun HomeMyWaveCard(
             )
             Row(
                 modifier = Modifier
-                    .clickable(onClick = onPlayToggle)
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
