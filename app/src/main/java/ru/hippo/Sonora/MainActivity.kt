@@ -5131,7 +5131,8 @@ private fun PlaylistCreateTrackPickerPage(
         SearchField(
             value = query,
             onValueChange = onQueryChange,
-            placeholder = "Search Tracks"
+            placeholder = "Search Tracks",
+            autoFocus = true
         )
 
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
