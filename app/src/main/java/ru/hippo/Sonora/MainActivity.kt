@@ -6345,10 +6345,11 @@ private fun HomeMyWaveCard(
             )
             Text(
                 text = track.displayTitle(),
+                modifier = Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 18.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.SemiBold,
-                    lineHeight = 22.sp
+                    lineHeight = 21.sp
                 ),
                 color = overlayTextColor.copy(alpha = if (lightTheme) 0.92f else 0.94f),
                 textAlign = TextAlign.Center,
