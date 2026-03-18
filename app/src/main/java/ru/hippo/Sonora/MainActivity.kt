@@ -339,7 +339,9 @@ private data class SonoraAppSettings(
     val fontStyle: AppFontStyle = AppFontStyle.System,
     val myWaveLook: MyWaveLook = MyWaveLook.Contours,
     val streamingSearchEngine: StreamingSearchEngine = StreamingSearchEngine.Spotify,
+    val useArtworkBasedPlayerBackground: Boolean = true,
     val accentHex: String = DEFAULT_ACCENT_HEX,
+    val autoSaveStreamingSongToLibrary: Boolean = true,
     val preservePlayerModes: Boolean = true,
     val trackGapSeconds: Float = 0f,
     val maxStorageMb: Int = -1,
@@ -412,7 +414,9 @@ private class SonoraSettingsStore(context: Context) {
             streamingSearchEngine = StreamingSearchEngine.fromStorage(
                 prefs.getString(KEY_STREAMING_SEARCH_ENGINE, StreamingSearchEngine.Spotify.storageValue)
             ),
+            useArtworkBasedPlayerBackground = prefs.getBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, true),
             accentHex = accentHex,
+            autoSaveStreamingSongToLibrary = prefs.getBoolean(KEY_AUTO_SAVE_STREAMING_SONG, true),
             preservePlayerModes = prefs.getBoolean(KEY_PRESERVE_PLAYER_MODES, true),
             trackGapSeconds = nearestTrackGapSecondsOption(prefs.getFloat(KEY_TRACK_GAP, 0f)),
             maxStorageMb = nearestMaxStorageOptionMb(prefs.getInt(KEY_MAX_STORAGE_MB, -1)),
@@ -428,7 +432,9 @@ private class SonoraSettingsStore(context: Context) {
             .putString(KEY_FONT_STYLE, settings.fontStyle.storageValue)
             .putString(KEY_MY_WAVE_LOOK, settings.myWaveLook.storageValue)
             .putString(KEY_STREAMING_SEARCH_ENGINE, settings.streamingSearchEngine.storageValue)
+            .putBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, settings.useArtworkBasedPlayerBackground)
             .putString(KEY_ACCENT_HEX, normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX)
+            .putBoolean(KEY_AUTO_SAVE_STREAMING_SONG, settings.autoSaveStreamingSongToLibrary)
             .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
             .putFloat(KEY_TRACK_GAP, nearestTrackGapSecondsOption(settings.trackGapSeconds))
             .putInt(KEY_MAX_STORAGE_MB, nearestMaxStorageOptionMb(settings.maxStorageMb))
@@ -532,9 +538,11 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_FONT_STYLE = "font_style"
         const val KEY_MY_WAVE_LOOK = "my_wave_look"
         const val KEY_STREAMING_SEARCH_ENGINE = "streaming_search_engine"
+        const val KEY_PLAYER_ARTWORK_BACKGROUND = "player_artwork_background"
         const val KEY_ACCENT_HEX = "accent_hex"
         const val KEY_ACCENT_HUE = "accent_hue"
         const val KEY_ACCENT_COLOR_LEGACY = "accent_color"
+        const val KEY_AUTO_SAVE_STREAMING_SONG = "auto_save_streaming_song"
         const val KEY_PRESERVE_PLAYER_MODES = "preserve_player_modes"
         const val KEY_TRACK_GAP = "track_gap_seconds"
         const val KEY_MAX_STORAGE_MB = "max_storage_mb"
@@ -2455,10 +2463,12 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 val playbackQueue = buildMiniStreamingPlaybackQueue(miniStreamingPlaybackQueue)
                 if (playbackQueue.any { it.id == targetPlaybackId }) {
                     playbackController.playOrToggleFromQueue(playbackQueue, targetPlaybackId)
-                    scheduleMiniStreamingBackgroundInstall(
-                        track = track,
-                        payload = payload
-                    )
+                    if (appSettings.autoSaveStreamingSongToLibrary) {
+                        scheduleMiniStreamingBackgroundInstall(
+                            track = track,
+                            payload = payload
+                        )
+                    }
                     prefetchMiniStreamingQueuePayloads(
                         queue = miniStreamingPlaybackQueue,
                         startIndexExclusive = normalizedStartIndex + 1
@@ -2529,11 +2539,13 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 miniStreamingInstallingJobs[miniTrackId] == null
             ) {
                 if (payload != null) {
-                    launchMiniStreamingInstall(
-                        track = queueTrack,
-                        initialPayload = payload,
-                        showErrorMessage = false
-                    )
+                    if (appSettings.autoSaveStreamingSongToLibrary) {
+                        launchMiniStreamingInstall(
+                            track = queueTrack,
+                            initialPayload = payload,
+                            showErrorMessage = false
+                        )
+                    }
                 } else {
                     launchMiniStreamingResolve(queueTrack)
                 }
@@ -4274,6 +4286,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                     sleepTimerRemainingMs = playbackController.sleepTimerRemainingMs,
                     nextTrack = miniStreamingNextPreviewTrack ?: playbackController.predictedNextTrackForSkip(),
                     useWaveSlider = appSettings.sliderStyle == PlayerSliderStyle.Wave,
+                    useArtworkBasedBackground = appSettings.useArtworkBasedPlayerBackground,
                     artworkStyle = appSettings.artworkStyle,
                     accentColor = resolveAccentColor(appSettings.accentHex),
                     preferredFontFamily = resolveSettingsFontFamily(appSettings.fontStyle),
@@ -7605,6 +7618,15 @@ private fun SettingsPage(
                         onSettingsChange(settings.copy(myWaveLook = selected))
                     }
                 )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsSwitchRow(
+                    title = "Player background from artwork",
+                    subtitle = "Use the dominant cover color behind the player",
+                    checked = settings.useArtworkBasedPlayerBackground,
+                    onCheckedChange = { enabled ->
+                        onSettingsChange(settings.copy(useArtworkBasedPlayerBackground = enabled))
+                    }
+                )
             }
         }
 
@@ -7660,6 +7682,15 @@ private fun SettingsPage(
                     checked = settings.preservePlayerModes,
                     onCheckedChange = { enabled ->
                         onSettingsChange(settings.copy(preservePlayerModes = enabled))
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsSwitchRow(
+                    title = "Auto-save streaming songs",
+                    subtitle = "Save online songs to the library while they play",
+                    checked = settings.autoSaveStreamingSongToLibrary,
+                    onCheckedChange = { enabled ->
+                        onSettingsChange(settings.copy(autoSaveStreamingSongToLibrary = enabled))
                     }
                 )
             }
@@ -10586,6 +10617,7 @@ private fun PlayerView(
     sleepTimerRemainingMs: Long,
     nextTrack: TrackItem?,
     useWaveSlider: Boolean,
+    useArtworkBasedBackground: Boolean,
     artworkStyle: ArtworkStyle,
     accentColor: Color,
     preferredFontFamily: FontFamily?,
@@ -10608,6 +10640,11 @@ private fun PlayerView(
     val secondaryColor = if (isDark) Color.White.copy(alpha = 0.66f) else MaterialTheme.colorScheme.onSurfaceVariant
     val controlColor = if (hasQueue) primaryColor else secondaryColor.copy(alpha = 0.65f)
     val playerButtonCornerRadius = 0.dp
+    val artworkBackgroundColor = if (useArtworkBasedBackground) {
+        rememberHomeLastAddedBackgroundColor(track)
+    } else {
+        MaterialTheme.colorScheme.background
+    }
     val nextPreviewText = remember(nextTrack?.id, nextTrack?.title, nextTrack?.artist) {
         buildNextPreviewText(nextTrack)
     }
@@ -10651,7 +10688,7 @@ private fun PlayerView(
 
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.background
+        color = artworkBackgroundColor
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val artworkHeight = minOf(maxWidth, maxHeight * 0.56f)
@@ -10832,6 +10869,7 @@ private fun PlayerView(
                 Column(
                     modifier = Modifier
                         .offset(y = -largeScreenBottomLift)
+                        .navigationBarsPadding()
                 ) {
                     Text(
                         text = nextPreviewText,
