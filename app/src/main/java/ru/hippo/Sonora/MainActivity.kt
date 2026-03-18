@@ -10643,10 +10643,58 @@ private fun PlayerView(
     val secondaryColor = if (isDark) Color.White.copy(alpha = 0.66f) else MaterialTheme.colorScheme.onSurfaceVariant
     val controlColor = if (hasQueue) primaryColor else secondaryColor.copy(alpha = 0.65f)
     val playerButtonCornerRadius = 0.dp
-    val artworkBackgroundColor = if (useArtworkBasedBackground) {
-        rememberHomeLastAddedBackgroundColor(track)
+    val playerPaletteKey = remember(track.id, track.artworkPath, track.filePath) {
+        wavePaletteCacheKey(track)
+    }
+    val playerPaletteTarget by produceState(
+        initialValue = if (useArtworkBasedBackground) {
+            playerPaletteKey?.let { wavePaletteCacheGet(it) } ?: defaultWavePalette()
+        } else {
+            defaultWavePalette()
+        },
+        key1 = useArtworkBasedBackground,
+        key2 = playerPaletteKey
+    ) {
+        if (!useArtworkBasedBackground) {
+            value = defaultWavePalette()
+            return@produceState
+        }
+        val key = playerPaletteKey ?: run {
+            value = defaultWavePalette()
+            return@produceState
+        }
+        wavePaletteCacheGet(key)?.let { cached ->
+            value = cached
+            return@produceState
+        }
+        val resolved = withContext(Dispatchers.IO) {
+            buildWavePaletteForTrack(track)
+        }
+        wavePaletteCachePut(key, resolved)
+        value = resolved
+    }
+    val playerPaletteAnim = tween<Color>(
+        durationMillis = 2200,
+        easing = androidx.compose.animation.core.FastOutSlowInEasing
+    )
+    val p0 by animateColorAsState(targetValue = playerPaletteTarget[0], animationSpec = playerPaletteAnim, label = "player_bg_c0")
+    val p1 by animateColorAsState(targetValue = playerPaletteTarget[1], animationSpec = playerPaletteAnim, label = "player_bg_c1")
+    val p2 by animateColorAsState(targetValue = playerPaletteTarget[2], animationSpec = playerPaletteAnim, label = "player_bg_c2")
+    val p3 by animateColorAsState(targetValue = playerPaletteTarget[3], animationSpec = playerPaletteAnim, label = "player_bg_c3")
+    val baseBackground = MaterialTheme.colorScheme.background
+    val backgroundBrush = if (useArtworkBasedBackground) {
+        Brush.linearGradient(
+            colors = listOf(
+                blendColors(p0, baseBackground, if (isDark) 0.18f else 0.24f),
+                blendColors(p1, baseBackground, if (isDark) 0.22f else 0.28f),
+                blendColors(p2, baseBackground, if (isDark) 0.28f else 0.34f),
+                blendColors(p3, baseBackground, if (isDark) 0.34f else 0.40f)
+            ),
+            start = Offset.Zero,
+            end = Offset(1200f, 1800f)
+        )
     } else {
-        MaterialTheme.colorScheme.background
+        Brush.verticalGradient(colors = listOf(baseBackground, baseBackground))
     }
     val nextPreviewText = remember(nextTrack?.id, nextTrack?.title, nextTrack?.artist) {
         buildNextPreviewText(nextTrack)
@@ -10691,9 +10739,13 @@ private fun PlayerView(
 
     Surface(
         modifier = modifier,
-        color = artworkBackgroundColor
+        color = Color.Transparent
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(backgroundBrush)
+        ) {
             val artworkHeight = minOf(maxWidth, maxHeight * 0.56f)
             val sliderMax = durationMs.toFloat().coerceAtLeast(1f)
             val sliderBaseColor = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
