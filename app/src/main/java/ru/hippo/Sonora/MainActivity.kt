@@ -151,6 +151,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -3375,7 +3377,8 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                             SearchField(
                                 value = activeSearchQuery,
                                 onValueChange = onSearchQueryChange,
-                                placeholder = activeSearchPlaceholder
+                                placeholder = activeSearchPlaceholder,
+                                autoFocus = searchVisible
                             )
                         }
                     }
@@ -4810,13 +4813,22 @@ private fun AccentTextButton(
 private fun SearchField(
     value: String,
     onValueChange: (String) -> Unit,
-    placeholder: String
+    placeholder: String,
+    autoFocus: Boolean
 ) {
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusRequester = remember { FocusRequester() }
     val fieldBackground = if (isDark) {
         Color.White.copy(alpha = 0.12f)
     } else {
         Color.Black.copy(alpha = 0.06f)
+    }
+    LaunchedEffect(autoFocus) {
+        if (autoFocus) {
+            focusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
     Surface(
         color = fieldBackground,
@@ -4849,7 +4861,9 @@ private fun SearchField(
                     fontWeight = FontWeight.Medium
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
                 decorationBox = { innerTextField ->
                     if (value.isBlank()) {
                         Text(
@@ -6328,6 +6342,18 @@ private fun HomeMyWaveCard(
                     fontSize = 34.sp
                 ),
                 color = overlayTextColor
+            )
+            Text(
+                text = track.displayTitle(),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    lineHeight = 22.sp
+                ),
+                color = overlayTextColor.copy(alpha = if (lightTheme) 0.92f else 0.94f),
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
             Row(
                 modifier = Modifier
