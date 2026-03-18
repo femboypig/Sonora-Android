@@ -2383,6 +2383,9 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         payload: MiniStreamingDownloadPayload,
         delayMs: Long = 1000L
     ) {
+        if (!appSettings.autoSaveStreamingSongToLibrary) {
+            return
+        }
         scope.launch {
             delay(delayMs)
             if (miniStreamingActiveTrackId != track.trackId) {
