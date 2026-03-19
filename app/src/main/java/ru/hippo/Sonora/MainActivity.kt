@@ -10954,17 +10954,17 @@ private fun PlayerView(
     val controlColor = if (hasQueue) primaryColor else secondaryColor.copy(alpha = 0.65f)
     val anchorColor = blendColors(blendColors(p0, p1, 0.52f), blendColors(p2, p3, 0.38f), 0.56f)
     val gradientStart = if (isDark) {
-        blendColors(baseBackground, anchorColor, 0.36f)
+        blendColors(baseBackground, anchorColor, 0.24f)
     } else {
         blendColors(baseBackground, anchorColor, 0.24f)
     }
     val gradientMid = if (isDark) {
-        blendColors(baseBackground, blendColors(p1, p2, 0.45f), 0.22f)
+        blendColors(baseBackground, blendColors(p1, p2, 0.45f), 0.15f)
     } else {
         blendColors(baseBackground, blendColors(p1, p2, 0.45f), 0.14f)
     }
     val gradientTail = if (isDark) {
-        blendColors(baseBackground, p3, 0.12f)
+        blendColors(baseBackground, p3, 0.07f)
     } else {
         blendColors(baseBackground, p3, 0.08f)
     }
