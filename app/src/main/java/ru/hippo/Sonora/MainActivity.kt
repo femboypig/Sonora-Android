@@ -6336,23 +6336,15 @@ private fun HomeMyWaveCard(
         ) {
             val overlayTextColor = if (lightTheme) Color(0xFF201712) else Color.White
             Text(
-                text = "My wave",
+                text = track.displayTitle(),
+                modifier = Modifier.padding(horizontal = 16.dp),
                 style = TextStyle(
                     fontFamily = SonoraAndroidHomeHeadingFontFamily,
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 34.sp
+                    fontSize = 30.sp,
+                    lineHeight = 34.sp
                 ),
-                color = overlayTextColor
-            )
-            Text(
-                text = track.displayTitle(),
-                modifier = Modifier.padding(horizontal = 16.dp),
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    lineHeight = 21.sp
-                ),
-                color = overlayTextColor.copy(alpha = if (lightTheme) 0.92f else 0.94f),
+                color = overlayTextColor,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
