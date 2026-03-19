@@ -10438,8 +10438,6 @@ private fun PlainControlButton(
     iconHeight: Dp = iconSize,
     cornerRadius: Dp = 999.dp,
     tint: Color,
-    backgroundColor: Color = Color.Transparent,
-    borderColor: Color = Color.Transparent,
     disabledAlpha: Float = 0.45f
 ) {
     Box(
@@ -10447,8 +10445,6 @@ private fun PlainControlButton(
             .size(size)
             .alpha(if (enabled) 1f else disabledAlpha)
             .clip(RoundedCornerShape(cornerRadius))
-            .background(backgroundColor)
-            .border(1.dp, borderColor, RoundedCornerShape(cornerRadius))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -10717,36 +10713,34 @@ private fun PlayerView(
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val controlColor = if (hasQueue) primaryColor else secondaryColor.copy(alpha = 0.65f)
-    val buttonBackground = when {
-        !useArtworkBasedBackground -> Color.Transparent
-        useDarkForeground -> Color.White.copy(alpha = 0.16f)
-        else -> Color.Black.copy(alpha = 0.16f)
+    val anchorColor = blendColors(blendColors(p0, p1, 0.52f), blendColors(p2, p3, 0.38f), 0.56f)
+    val gradientStart = if (isDark) {
+        blendColors(baseBackground, anchorColor, 0.36f)
+    } else {
+        blendColors(baseBackground, anchorColor, 0.24f)
     }
-    val prominentButtonBackground = when {
-        !useArtworkBasedBackground -> Color.Transparent
-        useDarkForeground -> Color.White.copy(alpha = 0.24f)
-        else -> Color.Black.copy(alpha = 0.24f)
+    val gradientMid = if (isDark) {
+        blendColors(baseBackground, blendColors(p1, p2, 0.45f), 0.22f)
+    } else {
+        blendColors(baseBackground, blendColors(p1, p2, 0.45f), 0.14f)
     }
-    val buttonBorderColor = when {
-        !useArtworkBasedBackground -> Color.Transparent
-        useDarkForeground -> Color.Black.copy(alpha = 0.08f)
-        else -> Color.White.copy(alpha = 0.10f)
+    val gradientTail = if (isDark) {
+        blendColors(baseBackground, p3, 0.12f)
+    } else {
+        blendColors(baseBackground, p3, 0.08f)
     }
-    val paletteMuted0 = blendColors(baseBackground, p0, if (isDark) 0.20f else 0.08f)
-    val paletteMuted1 = blendColors(baseBackground, p1, if (isDark) 0.16f else 0.07f)
-    val paletteMuted2 = blendColors(baseBackground, p2, if (isDark) 0.11f else 0.05f)
-    val paletteMuted3 = blendColors(baseBackground, p3, if (isDark) 0.07f else 0.03f)
     val backgroundBrush = if (useArtworkBasedBackground) {
         Brush.linearGradient(
             colors = listOf(
-                paletteMuted0,
-                blendColors(paletteMuted0, paletteMuted1, 0.5f),
-                blendColors(paletteMuted1, paletteMuted2, 0.5f),
-                blendColors(paletteMuted2, paletteMuted3, 0.5f),
+                gradientStart,
+                blendColors(gradientStart, gradientMid, 0.48f),
+                gradientMid,
+                blendColors(gradientMid, gradientTail, 0.52f),
+                gradientTail,
                 baseBackground
             ),
-            start = Offset.Zero,
-            end = Offset(1200f, 1800f)
+            start = Offset(0f, 0f),
+            end = Offset(0f, 1800f)
         )
     } else {
         Brush.verticalGradient(colors = listOf(baseBackground, baseBackground))
@@ -11027,9 +11021,7 @@ private fun PlayerView(
                                 size = 40.dp,
                                 iconSize = 24.dp,
                                 cornerRadius = playerButtonCornerRadius,
-                                tint = repeatTint,
-                                backgroundColor = buttonBackground,
-                                borderColor = buttonBorderColor
+                                tint = repeatTint
                             )
                             PlainControlButton(
                                 iconRes = R.drawable.ic_player_shuffle,
@@ -11043,9 +11035,7 @@ private fun PlayerView(
                                     accentColor
                                 } else {
                                     primaryColor.copy(alpha = 0.92f)
-                                },
-                                backgroundColor = buttonBackground,
-                                borderColor = buttonBorderColor
+                                }
                             )
                         }
 
@@ -11062,9 +11052,7 @@ private fun PlayerView(
                                 size = 64.dp,
                                 iconSize = 44.dp,
                                 cornerRadius = playerButtonCornerRadius,
-                                tint = controlColor,
-                                backgroundColor = buttonBackground,
-                                borderColor = buttonBorderColor
+                                tint = controlColor
                             )
                             PlainControlButton(
                                 iconRes = if (isPlayingVisual) R.drawable.ic_global_pause else R.drawable.ic_global_play,
@@ -11074,9 +11062,7 @@ private fun PlayerView(
                                 size = 76.dp,
                                 iconSize = 56.dp,
                                 cornerRadius = playerButtonCornerRadius,
-                                tint = controlColor,
-                                backgroundColor = prominentButtonBackground,
-                                borderColor = buttonBorderColor
+                                tint = controlColor
                             )
                             PlainControlButton(
                                 iconRes = R.drawable.ic_global_next,
@@ -11086,9 +11072,7 @@ private fun PlayerView(
                                 size = 64.dp,
                                 iconSize = 44.dp,
                                 cornerRadius = playerButtonCornerRadius,
-                                tint = controlColor,
-                                backgroundColor = buttonBackground,
-                                borderColor = buttonBorderColor
+                                tint = controlColor
                             )
                         }
 
@@ -11111,9 +11095,7 @@ private fun PlayerView(
                                     accentColor
                                 } else {
                                     primaryColor.copy(alpha = 0.92f)
-                                },
-                                backgroundColor = buttonBackground,
-                                borderColor = buttonBorderColor
+                                }
                             )
                             PlainControlButton(
                                 iconRes = if (isFavorite) R.drawable.heart_fill else R.drawable.heart,
@@ -11127,9 +11109,7 @@ private fun PlayerView(
                                     Color(0xFFFF5966)
                                 } else {
                                     primaryColor.copy(alpha = 0.92f)
-                                },
-                                backgroundColor = buttonBackground,
-                                borderColor = buttonBorderColor
+                                }
                             )
                         }
                     }
