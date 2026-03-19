@@ -37,6 +37,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -53,6 +54,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -10865,7 +10867,7 @@ private fun PlayerView(
             val sliderBaseColor = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
             val sliderActiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 1f else 0.45f)
             val sliderInactiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 0.26f else 0.12f)
-            val controlsBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp
+            val controlsBottomPadding = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding() + 16.dp
             val largeScreenBottomLift = when {
                 maxHeight >= 900.dp || maxWidth >= 680.dp -> 28.dp
                 maxHeight >= 820.dp || maxWidth >= 600.dp -> 18.dp
