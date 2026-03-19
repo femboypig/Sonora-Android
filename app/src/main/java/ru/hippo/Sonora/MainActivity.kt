@@ -4895,7 +4895,13 @@ private fun SearchField(
     }
     LaunchedEffect(autoFocus, autoFocusKey) {
         if (autoFocus) {
-            delay(60)
+            delay(80)
+            focusRequester.requestFocus()
+            keyboardController?.show()
+            delay(140)
+            focusRequester.requestFocus()
+            keyboardController?.show()
+            delay(180)
             focusRequester.requestFocus()
             keyboardController?.show()
         }
@@ -10937,7 +10943,11 @@ private fun PlayerView(
     val p1 by animateColorAsState(targetValue = playerPaletteTarget[1], animationSpec = playerPaletteAnim, label = "player_bg_c1")
     val p2 by animateColorAsState(targetValue = playerPaletteTarget[2], animationSpec = playerPaletteAnim, label = "player_bg_c2")
     val p3 by animateColorAsState(targetValue = playerPaletteTarget[3], animationSpec = playerPaletteAnim, label = "player_bg_c3")
-    val baseBackground = MaterialTheme.colorScheme.background
+    val baseBackground = if (isDark) {
+        Color(0xFF050505)
+    } else {
+        Color(0xFFF7F7F3)
+    }
     val tonalAnchor = blendColors(blendColors(p0, p1, 0.5f), blendColors(p2, p3, 0.5f), 0.42f)
     val useDarkForeground = !isDark && useArtworkBasedBackground && tonalAnchor.luminance() > 0.58f
     val primaryColor = when {
