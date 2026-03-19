@@ -4824,7 +4824,7 @@ private fun SearchField(
     } else {
         Color.Black.copy(alpha = 0.06f)
     }
-    LaunchedEffect(autoFocus) {
+    LaunchedEffect(autoFocus, placeholder) {
         if (autoFocus) {
             focusRequester.requestFocus()
             keyboardController?.show()
