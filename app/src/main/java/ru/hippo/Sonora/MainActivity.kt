@@ -2951,7 +2951,11 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
 
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    val tabBarBackground = if (isDark) SonoraTabBarDark else SonoraTabBarLight
+    val tabBarBackground = blendColors(
+        MaterialTheme.colorScheme.surface,
+        MaterialTheme.colorScheme.background,
+        if (isDark) 0.62f else 0.48f
+    )
     val tabInactiveColor = if (isDark) SonoraTabInactiveDark else SonoraTabInactiveLight
 
     val isCreateNameScreen = playlistCreateStep == PlaylistCreateStep.Name
@@ -10716,8 +10720,16 @@ private fun MiniPlayer(
     onNext: () -> Unit
 ) {
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    val background = if (isDark) SonoraMiniPlayerDark else SonoraMiniPlayerLight
-    val border = if (isDark) SonoraMiniPlayerBorderDark else SonoraMiniPlayerBorderLight
+    val background = blendColors(
+        MaterialTheme.colorScheme.surface,
+        MaterialTheme.colorScheme.background,
+        if (isDark) 0.54f else 0.38f
+    )
+    val border = blendColors(
+        if (isDark) SonoraMiniPlayerBorderDark else SonoraMiniPlayerBorderLight,
+        MaterialTheme.colorScheme.onSurface.copy(alpha = if (isDark) 0.16f else 0.10f),
+        0.45f
+    )
     val canStepQueue = hasQueue && canStep
     val artworkBitmap = rememberTrackArtwork(track, maxSize = 192)
     var dragX by remember { mutableFloatStateOf(0f) }
