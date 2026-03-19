@@ -2240,8 +2240,12 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
 
     suspend fun installMiniStreamingTrackToLibrary(
         track: MiniStreamingTrack,
-        payload: MiniStreamingDownloadPayload
+        payload: MiniStreamingDownloadPayload,
+        forceSave: Boolean
     ): TrackItem? {
+        if (!forceSave && !appSettings.autoSaveStreamingSongToLibrary) {
+            return null
+        }
         val existing = knownInstalledMiniStreamingTrack(track)
         if (existing != null) {
             return existing
@@ -2373,7 +2377,14 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             miniStreamingResolvedPayloadByTrackId = miniStreamingResolvedPayloadByTrackId + (track.trackId to payload)
             refreshMiniStreamingQueueInPlayer()
 
-            val installed = installMiniStreamingTrackToLibrary(track, payload)
+            if (!showErrorMessage && !appSettings.autoSaveStreamingSongToLibrary) {
+                return@launch
+            }
+            val installed = installMiniStreamingTrackToLibrary(
+                track = track,
+                payload = payload,
+                forceSave = showErrorMessage
+            )
             if (installed == null && showErrorMessage) {
                 snackbarHostState.showSnackbar("Install failed for ${track.title}")
             }
@@ -3419,7 +3430,8 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                                 value = activeSearchQuery,
                                 onValueChange = onSearchQueryChange,
                                 placeholder = activeSearchPlaceholder,
-                                autoFocus = searchVisible
+                                autoFocus = searchVisible,
+                                autoFocusKey = "${selectedTab.name}:${showMusicPage}:${showFavoritesPage}:${showPlaylistsListPage}:${showSearch}"
                             )
                         }
                     }
@@ -4856,7 +4868,8 @@ private fun SearchField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
-    autoFocus: Boolean
+    autoFocus: Boolean,
+    autoFocusKey: String
 ) {
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -4866,8 +4879,9 @@ private fun SearchField(
     } else {
         Color.Black.copy(alpha = 0.06f)
     }
-    LaunchedEffect(autoFocus, placeholder) {
+    LaunchedEffect(autoFocus, autoFocusKey) {
         if (autoFocus) {
+            delay(60)
             focusRequester.requestFocus()
             keyboardController?.show()
         }
@@ -5174,7 +5188,8 @@ private fun PlaylistCreateTrackPickerPage(
             value = query,
             onValueChange = onQueryChange,
             placeholder = "Search Tracks",
-            autoFocus = true
+            autoFocus = true,
+            autoFocusKey = "select_music"
         )
 
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
@@ -10751,7 +10766,7 @@ private fun PlayerView(
     val p3 by animateColorAsState(targetValue = playerPaletteTarget[3], animationSpec = playerPaletteAnim, label = "player_bg_c3")
     val baseBackground = MaterialTheme.colorScheme.background
     val tonalAnchor = blendColors(blendColors(p0, p1, 0.5f), blendColors(p2, p3, 0.5f), 0.42f)
-    val useDarkForeground = useArtworkBasedBackground && tonalAnchor.luminance() > 0.58f
+    val useDarkForeground = !isDark && useArtworkBasedBackground && tonalAnchor.luminance() > 0.58f
     val primaryColor = when {
         useDarkForeground -> Color(0xFF17110C)
         isDark -> Color.White
@@ -10850,10 +10865,10 @@ private fun PlayerView(
             val sliderBaseColor = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
             val sliderActiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 1f else 0.45f)
             val sliderInactiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 0.26f else 0.12f)
-            val controlsBottomPadding = 6.dp
+            val controlsBottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp
             val largeScreenBottomLift = when {
-                maxHeight >= 900.dp || maxWidth >= 680.dp -> 16.dp
-                maxHeight >= 820.dp || maxWidth >= 600.dp -> 10.dp
+                maxHeight >= 900.dp || maxWidth >= 680.dp -> 28.dp
+                maxHeight >= 820.dp || maxWidth >= 600.dp -> 18.dp
                 else -> 0.dp
             }
             val sliderColors = SliderDefaults.colors(
