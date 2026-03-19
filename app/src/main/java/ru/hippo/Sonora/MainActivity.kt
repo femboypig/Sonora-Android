@@ -338,6 +338,18 @@ private enum class StreamingSearchEngine(val storageValue: String, val label: St
     }
 }
 
+private enum class AppBackgroundMode(val storageValue: String, val label: String) {
+    System("system", "System"),
+    Artwork("artwork", "Artwork"),
+    Custom("custom", "Custom");
+
+    companion object {
+        fun fromStorage(value: String?): AppBackgroundMode {
+            return values().firstOrNull { it.storageValue == value } ?: System
+        }
+    }
+}
+
 private data class SonoraAppSettings(
     val sliderStyle: PlayerSliderStyle = PlayerSliderStyle.Wave,
     val artworkStyle: ArtworkStyle = ArtworkStyle.Square,
@@ -345,6 +357,7 @@ private data class SonoraAppSettings(
     val myWaveLook: MyWaveLook = MyWaveLook.Contours,
     val streamingSearchEngine: StreamingSearchEngine = StreamingSearchEngine.Spotify,
     val useArtworkBasedPlayerBackground: Boolean = true,
+    val appBackgroundMode: AppBackgroundMode = AppBackgroundMode.System,
     val appBackgroundHex: String? = null,
     val accentHex: String = DEFAULT_ACCENT_HEX,
     val autoSaveStreamingSongToLibrary: Boolean = true,
@@ -421,6 +434,12 @@ private class SonoraSettingsStore(context: Context) {
                 prefs.getString(KEY_STREAMING_SEARCH_ENGINE, StreamingSearchEngine.Spotify.storageValue)
             ),
             useArtworkBasedPlayerBackground = prefs.getBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, true),
+            appBackgroundMode = prefs.getString(KEY_APP_BACKGROUND_MODE, null)?.let(AppBackgroundMode::fromStorage)
+                ?: when {
+                    prefs.contains(KEY_APP_BACKGROUND_HEX) -> AppBackgroundMode.Custom
+                    prefs.getBoolean(KEY_APP_ACCENT_BACKGROUND, false) -> AppBackgroundMode.Custom
+                    else -> AppBackgroundMode.System
+                },
             appBackgroundHex = normalizeHexColor(prefs.getString(KEY_APP_BACKGROUND_HEX, null))
                 ?: if (prefs.getBoolean(KEY_APP_ACCENT_BACKGROUND, false)) accentHex else null,
             accentHex = accentHex,
@@ -441,6 +460,7 @@ private class SonoraSettingsStore(context: Context) {
             .putString(KEY_MY_WAVE_LOOK, settings.myWaveLook.storageValue)
             .putString(KEY_STREAMING_SEARCH_ENGINE, settings.streamingSearchEngine.storageValue)
             .putBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, settings.useArtworkBasedPlayerBackground)
+            .putString(KEY_APP_BACKGROUND_MODE, settings.appBackgroundMode.storageValue)
             .putString(KEY_ACCENT_HEX, normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX)
             .putBoolean(KEY_AUTO_SAVE_STREAMING_SONG, settings.autoSaveStreamingSongToLibrary)
             .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
@@ -449,7 +469,7 @@ private class SonoraSettingsStore(context: Context) {
             .putBoolean(KEY_CACHE_ONLINE_PLAYLIST_TRACKS, settings.cacheOnlinePlaylistTracks)
             .putInt(KEY_ONLINE_PLAYLIST_CACHE_MAX_MB, nearestMaxStorageOptionMb(settings.onlinePlaylistCacheMaxMb))
             .apply {
-                if (settings.appBackgroundHex.isNullOrBlank()) {
+                if (settings.appBackgroundMode != AppBackgroundMode.Custom || settings.appBackgroundHex.isNullOrBlank()) {
                     remove(KEY_APP_BACKGROUND_HEX)
                 } else {
                     putString(KEY_APP_BACKGROUND_HEX, normalizeHexColor(settings.appBackgroundHex))
@@ -555,6 +575,7 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_MY_WAVE_LOOK = "my_wave_look"
         const val KEY_STREAMING_SEARCH_ENGINE = "streaming_search_engine"
         const val KEY_PLAYER_ARTWORK_BACKGROUND = "player_artwork_background"
+        const val KEY_APP_BACKGROUND_MODE = "app_background_mode"
         const val KEY_APP_ACCENT_BACKGROUND = "app_accent_background"
         const val KEY_APP_BACKGROUND_HEX = "app_background_hex"
         const val KEY_ACCENT_HEX = "accent_hex"
@@ -3122,34 +3143,91 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
     val tabActiveColor = accentColor
     val baseScheme = MaterialTheme.colorScheme
-    val appBackgroundSource = remember(appSettings.appBackgroundHex) {
-        appSettings.appBackgroundHex?.let { parseHexColor(it) }
+    val appBackgroundArtworkKey = remember(
+        appSettings.appBackgroundMode,
+        miniPlayerTrack?.id,
+        miniPlayerTrack?.artworkPath,
+        miniPlayerTrack?.filePath
+    ) {
+        if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
+            wavePaletteCacheKey(miniPlayerTrack)
+        } else {
+            null
+        }
     }
-    val appBackground = remember(baseScheme, appBackgroundSource, isDark) {
+    val appBackgroundArtworkColor by produceState<Color?>(
+        initialValue = null,
+        key1 = appSettings.appBackgroundMode,
+        key2 = appBackgroundArtworkKey
+    ) {
+        if (appSettings.appBackgroundMode != AppBackgroundMode.Artwork) {
+            value = null
+            return@produceState
+        }
+        val track = miniPlayerTrack ?: run {
+            value = null
+            return@produceState
+        }
+        val key = appBackgroundArtworkKey ?: run {
+            value = null
+            return@produceState
+        }
+        val palette = wavePaletteCacheGet(key) ?: withContext(Dispatchers.IO) {
+            buildWavePaletteForTrack(track)
+        }.also { resolved ->
+            wavePaletteCachePut(key, resolved)
+        }
+        value = blendColors(
+            blendColors(palette[0], palette[1], 0.48f),
+            blendColors(palette[2], palette[3], 0.34f),
+            0.42f
+        )
+    }
+    val appBackgroundSource = remember(
+        appSettings.appBackgroundMode,
+        appSettings.appBackgroundHex,
+        appBackgroundArtworkColor
+    ) {
+        when (appSettings.appBackgroundMode) {
+            AppBackgroundMode.System -> null
+            AppBackgroundMode.Artwork -> appBackgroundArtworkColor
+            AppBackgroundMode.Custom -> appSettings.appBackgroundHex?.let { parseHexColor(it) }
+        }
+    }
+    val appBackgroundMix = if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
+        if (isDark) 0.16f else 0.11f
+    } else {
+        if (isDark) 0.18f else 0.12f
+    }
+    val appSurfaceMix = if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
+        if (isDark) 0.11f else 0.08f
+    } else {
+        if (isDark) 0.12f else 0.08f
+    }
+    val appSurfaceVariantMix = if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
+        if (isDark) 0.09f else 0.06f
+    } else {
+        if (isDark) 0.10f else 0.06f
+    }
+    val appBackground = remember(baseScheme, appBackgroundSource, appBackgroundMix) {
         if (appBackgroundSource == null) {
             baseScheme.background
-        } else if (isDark) {
-            blendColors(baseScheme.background, appBackgroundSource, 0.18f)
         } else {
-            blendColors(baseScheme.background, appBackgroundSource, 0.12f)
+            blendColors(baseScheme.background, appBackgroundSource, appBackgroundMix)
         }
     }
-    val appSurface = remember(baseScheme, appBackgroundSource, isDark) {
+    val appSurface = remember(baseScheme, appBackgroundSource, appSurfaceMix) {
         if (appBackgroundSource == null) {
             baseScheme.surface
-        } else if (isDark) {
-            blendColors(baseScheme.surface, appBackgroundSource, 0.12f)
         } else {
-            blendColors(baseScheme.surface, appBackgroundSource, 0.08f)
+            blendColors(baseScheme.surface, appBackgroundSource, appSurfaceMix)
         }
     }
-    val appSurfaceVariant = remember(baseScheme, appBackgroundSource, isDark) {
+    val appSurfaceVariant = remember(baseScheme, appBackgroundSource, appSurfaceVariantMix) {
         if (appBackgroundSource == null) {
             baseScheme.surfaceVariant
-        } else if (isDark) {
-            blendColors(baseScheme.surfaceVariant, appBackgroundSource, 0.10f)
         } else {
-            blendColors(baseScheme.surfaceVariant, appBackgroundSource, 0.06f)
+            blendColors(baseScheme.surfaceVariant, appBackgroundSource, appSurfaceVariantMix)
         }
     }
     val appColorScheme = remember(baseScheme, appBackground, appSurface, appSurfaceVariant) {
@@ -7647,11 +7725,20 @@ private fun SettingsPage(
         hasOnlinePlaylistCacheLimit && onlinePlaylistCacheUsedBytes > onlinePlaylistCacheBytes
     val accentHex = normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX
     val accentPreview = remember(accentHex) { resolveAccentColor(accentHex) }
+    val appBackgroundMode = settings.appBackgroundMode
     val appBackgroundHex = normalizeHexColor(settings.appBackgroundHex)
     val appBackgroundBaseColor = MaterialTheme.colorScheme.background
     val appBackgroundFallbackHex = remember(appBackgroundBaseColor) { formatColorHex(appBackgroundBaseColor) }
-    val appBackgroundPreview = remember(appBackgroundHex, appBackgroundFallbackHex) {
-        appBackgroundHex?.let { parseHexColor(it) } ?: resolveAccentColor(appBackgroundFallbackHex)
+    val appBackgroundPreview = remember(appBackgroundMode, appBackgroundHex, appBackgroundFallbackHex, accentHex) {
+        when (appBackgroundMode) {
+            AppBackgroundMode.System -> parseHexColor(appBackgroundFallbackHex)
+            AppBackgroundMode.Artwork -> blendColors(
+                parseHexColor(appBackgroundFallbackHex),
+                resolveAccentColor(accentHex),
+                0.12f
+            )
+            AppBackgroundMode.Custom -> appBackgroundHex?.let { parseHexColor(it) } ?: resolveAccentColor(appBackgroundFallbackHex)
+        }
     }
     var showAccentColorDialog by rememberSaveable { mutableStateOf(false) }
     var showAppBackgroundColorDialog by rememberSaveable { mutableStateOf(false) }
@@ -7701,13 +7788,40 @@ private fun SettingsPage(
                 Spacer(modifier = Modifier.height(12.dp))
                 SettingsColorPickerRow(
                     title = "App background",
-                    subtitle = "System background or custom #RRGGBB",
-                    valueLabel = appBackgroundHex ?: "System",
+                    subtitle = "Current app page background preview",
+                    valueLabel = when (appBackgroundMode) {
+                        AppBackgroundMode.System -> "System"
+                        AppBackgroundMode.Artwork -> "Artwork"
+                        AppBackgroundMode.Custom -> appBackgroundHex ?: "Custom"
+                    },
                     color = appBackgroundPreview,
                     onClick = {
-                        showAppBackgroundColorDialog = true
+                        if (appBackgroundMode == AppBackgroundMode.Custom) {
+                            showAppBackgroundColorDialog = true
+                        }
                     }
                 )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsChoiceRow(
+                    title = "App background mode",
+                    subtitle = "System, custom color or now-playing artwork",
+                    options = AppBackgroundMode.values().map { it.label },
+                    selectedIndex = AppBackgroundMode.values().indexOf(appBackgroundMode),
+                    onSelect = { index ->
+                        val selected = AppBackgroundMode.values().getOrElse(index) { AppBackgroundMode.System }
+                        onSettingsChange(settings.copy(appBackgroundMode = selected))
+                    }
+                )
+                if (appBackgroundMode == AppBackgroundMode.Custom) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    SettingsLinkRow(
+                        title = "Pick custom background color",
+                        value = appBackgroundHex ?: "Choose",
+                        onClick = {
+                            showAppBackgroundColorDialog = true
+                        }
+                    )
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 SettingsChoiceRow(
                     title = "Streaming search engine",
@@ -7990,11 +8104,11 @@ private fun SettingsPage(
             fallbackHex = appBackgroundFallbackHex,
             onDismiss = { showAppBackgroundColorDialog = false },
             onColorSelected = { selected ->
-                onSettingsChange(settings.copy(appBackgroundHex = selected))
+                onSettingsChange(settings.copy(appBackgroundMode = AppBackgroundMode.Custom, appBackgroundHex = selected))
                 showAppBackgroundColorDialog = false
             },
             onReset = {
-                onSettingsChange(settings.copy(appBackgroundHex = null))
+                onSettingsChange(settings.copy(appBackgroundMode = AppBackgroundMode.System, appBackgroundHex = null))
                 showAppBackgroundColorDialog = false
             }
         )
