@@ -3460,18 +3460,22 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         },
         bottomBar = {
             if (!inPlaylistDetail && !inOverlayScreen && !inSubPage && !playerVisible) {
-                Column {
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-                    )
-                    Box(
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = tabBarBackground,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp
+                ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(tabBarBackground)
                             .navigationBarsPadding()
                     ) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                        )
                         NavigationBar(
-                            containerColor = tabBarBackground,
+                            containerColor = Color.Transparent,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(49.dp),
@@ -3506,7 +3510,9 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                                         )
                                     },
                                     colors = NavigationBarItemDefaults.colors(
-                                        indicatorColor = Color.Transparent
+                                        indicatorColor = Color.Transparent,
+                                        selectedIconColor = tabActiveColor,
+                                        unselectedIconColor = tabInactiveColor
                                     ),
                                     alwaysShowLabel = false
                                 )
@@ -6395,6 +6401,7 @@ private fun HomeMyWaveCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(428.dp)
+            .clip(RoundedCornerShape(30.dp))
             .clickable(onClick = onPlayToggle)
     ) {
         HomeMyWaveVisualBackground(
