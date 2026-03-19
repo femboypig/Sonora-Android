@@ -8776,9 +8776,9 @@ private fun SettingsSliderStylePreview(useWaveSlider: Boolean) {
             if (progressX > 0f) {
                 if (useWaveSlider) {
                     val path = androidx.compose.ui.graphics.Path()
-                    val waveStep = 2.dp.toPx().coerceAtLeast(1f)
-                    val wavelength = 18.dp.toPx()
-                    val amplitude = 2.1.dp.toPx()
+                    val waveStep = 3.dp.toPx().coerceAtLeast(1f)
+                    val wavelength = 26.dp.toPx()
+                    val amplitude = 1.4.dp.toPx()
                     val rampLength = 12.dp.toPx()
                     val twoPi = (Math.PI * 2).toFloat()
 
@@ -9120,9 +9120,9 @@ private fun WaveDownloadProgressBar(
         val centerY = size.height * 0.5f
         val lineHeight = 2.dp.toPx()
         val activeWidth = size.width * progressValue
-        val wavelength = 22.dp.toPx()
-        val amplitude = 2.2.dp.toPx()
-        val step = 2.dp.toPx().coerceAtLeast(1f)
+        val wavelength = 28.dp.toPx()
+        val amplitude = 1.6.dp.toPx()
+        val step = 3.dp.toPx().coerceAtLeast(1f)
         val phaseOffset = waveShift * (Math.PI.toFloat() * 2f)
 
         drawRoundRect(
@@ -11177,11 +11177,16 @@ private fun PlayerView(
             val sliderBaseColor = if (isDark) Color.White else MaterialTheme.colorScheme.onSurface
             val sliderActiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 1f else 0.45f)
             val sliderInactiveColor = sliderBaseColor.copy(alpha = if (hasQueue) 0.26f else 0.12f)
-            val controlsBottomPadding = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding() + 16.dp
+            val controlsBottomPadding = 8.dp
             val largeScreenBottomLift = when {
-                maxHeight >= 900.dp || maxWidth >= 680.dp -> 28.dp
-                maxHeight >= 820.dp || maxWidth >= 600.dp -> 18.dp
+                maxHeight >= 900.dp || maxWidth >= 680.dp -> 18.dp
+                maxHeight >= 820.dp || maxWidth >= 600.dp -> 10.dp
                 else -> 0.dp
+            }
+            val artworkTopInset = when {
+                maxHeight >= 900.dp || maxWidth >= 680.dp -> 12.dp
+                maxHeight >= 820.dp || maxWidth >= 600.dp -> 8.dp
+                else -> 6.dp
             }
             val sliderColors = SliderDefaults.colors(
                 thumbColor = sliderActiveColor,
@@ -11200,6 +11205,7 @@ private fun PlayerView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(artworkHeight)
+                        .padding(top = artworkTopInset)
                 ) {
                     val artworkModifier = Modifier
                         .fillMaxSize()
@@ -11553,9 +11559,9 @@ private fun WaveSliderTrack(
         }
 
         val path = androidx.compose.ui.graphics.Path()
-        val waveStep = 2.dp.toPx().coerceAtLeast(1f)
-        val wavelength = 18.dp.toPx()
-        val amplitude = 2.1.dp.toPx()
+        val waveStep = 3.dp.toPx().coerceAtLeast(1f)
+        val wavelength = 26.dp.toPx()
+        val amplitude = 1.4.dp.toPx()
         val seedShift = (waveSeed and 0xFF) * 0.025f
         val rampLength = 14.dp.toPx()
         val twoPi = (Math.PI * 2).toFloat()
