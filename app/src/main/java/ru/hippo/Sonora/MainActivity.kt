@@ -2951,11 +2951,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
 
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    val tabBarBackground = blendColors(
-        MaterialTheme.colorScheme.surface,
-        MaterialTheme.colorScheme.background,
-        if (isDark) 0.62f else 0.48f
-    )
+    val tabBarBackground = MaterialTheme.colorScheme.background
     val tabInactiveColor = if (isDark) SonoraTabInactiveDark else SonoraTabInactiveLight
 
     val isCreateNameScreen = playlistCreateStep == PlaylistCreateStep.Name
@@ -3479,7 +3475,8 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(49.dp),
-                            windowInsets = WindowInsets(0, 0, 0, 0)
+                            windowInsets = WindowInsets(0, 0, 0, 0),
+                            tonalElevation = 0.dp
                         ) {
                             tabSpecs.forEach { spec ->
                                 val selected = selectedTab == spec.tab
