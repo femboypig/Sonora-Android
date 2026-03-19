@@ -3013,6 +3013,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
 
     val miniPlayerTrack = playbackController.displayTrack ?: miniStreamingPendingTrack
+    val appBackgroundTrack = playbackController.currentTrack ?: miniPlayerTrack
     val miniPlayerVisible = !inPlaylistDetail &&
         !inOverlayScreen &&
         !inSubPage &&
@@ -3145,12 +3146,12 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     val baseScheme = MaterialTheme.colorScheme
     val appBackgroundArtworkKey = remember(
         appSettings.appBackgroundMode,
-        miniPlayerTrack?.id,
-        miniPlayerTrack?.artworkPath,
-        miniPlayerTrack?.filePath
+        appBackgroundTrack?.id,
+        appBackgroundTrack?.artworkPath,
+        appBackgroundTrack?.filePath
     ) {
         if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
-            wavePaletteCacheKey(miniPlayerTrack)
+            wavePaletteCacheKey(appBackgroundTrack)
         } else {
             null
         }
@@ -3164,7 +3165,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             value = null
             return@produceState
         }
-        val track = miniPlayerTrack ?: run {
+        val track = appBackgroundTrack ?: run {
             value = null
             return@produceState
         }
@@ -7731,9 +7732,9 @@ private fun SettingsPage(
     val appBackgroundFallbackHex = remember(appBackgroundBaseColor) { formatColorHex(appBackgroundBaseColor) }
     val appBackgroundPreview = remember(appBackgroundMode, appBackgroundHex, appBackgroundFallbackHex, accentHex) {
         when (appBackgroundMode) {
-            AppBackgroundMode.System -> parseHexColor(appBackgroundFallbackHex)
+            AppBackgroundMode.System -> parseHexColor(appBackgroundFallbackHex) ?: appBackgroundBaseColor
             AppBackgroundMode.Artwork -> blendColors(
-                parseHexColor(appBackgroundFallbackHex),
+                parseHexColor(appBackgroundFallbackHex) ?: appBackgroundBaseColor,
                 resolveAccentColor(accentHex),
                 0.12f
             )
