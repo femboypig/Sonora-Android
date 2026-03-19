@@ -3179,9 +3179,9 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
             wavePaletteCachePut(key, resolved)
         }
         value = blendColors(
-            blendColors(palette[0], palette[1], 0.48f),
-            blendColors(palette[2], palette[3], 0.34f),
-            0.42f
+            palette[0],
+            blendColors(palette[1], palette[2], 0.28f),
+            0.34f
         )
     }
     val appBackgroundSource = remember(
@@ -3196,17 +3196,17 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         }
     }
     val appBackgroundMix = if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
-        if (isDark) 0.16f else 0.11f
+        if (isDark) 0.22f else 0.18f
     } else {
         if (isDark) 0.18f else 0.12f
     }
     val appSurfaceMix = if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
-        if (isDark) 0.11f else 0.08f
+        if (isDark) 0.16f else 0.12f
     } else {
         if (isDark) 0.12f else 0.08f
     }
     val appSurfaceVariantMix = if (appSettings.appBackgroundMode == AppBackgroundMode.Artwork) {
-        if (isDark) 0.09f else 0.06f
+        if (isDark) 0.13f else 0.10f
     } else {
         if (isDark) 0.10f else 0.06f
     }
@@ -7736,7 +7736,7 @@ private fun SettingsPage(
             AppBackgroundMode.Artwork -> blendColors(
                 parseHexColor(appBackgroundFallbackHex) ?: appBackgroundBaseColor,
                 resolveAccentColor(accentHex),
-                0.12f
+                0.20f
             )
             AppBackgroundMode.Custom -> appBackgroundHex?.let { parseHexColor(it) } ?: resolveAccentColor(appBackgroundFallbackHex)
         }
@@ -11531,7 +11531,7 @@ private fun WaveSliderTrack(
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(24.dp)
+            .height(28.dp)
     ) {
         val start = sliderState.valueRange.start
         val end = sliderState.valueRange.endInclusive
@@ -11541,16 +11541,17 @@ private fun WaveSliderTrack(
         val progressX = size.width * progress
 
         val centerY = size.height / 2f
-        val inactiveLineHeight = 2.dp.toPx()
+        val trackThickness = 8.dp.toPx()
+        val trackCorner = 4.dp.toPx()
 
         if (progressX < size.width) {
             drawRoundRect(
                 color = inactiveColor,
-                topLeft = Offset(progressX, centerY - (inactiveLineHeight * 0.5f)),
-                size = Size(size.width - progressX, inactiveLineHeight),
+                topLeft = Offset(progressX, centerY - (trackThickness * 0.5f)),
+                size = Size(size.width - progressX, trackThickness),
                 cornerRadius = CornerRadius(
-                    x = inactiveLineHeight * 0.5f,
-                    y = inactiveLineHeight * 0.5f
+                    x = trackCorner,
+                    y = trackCorner
                 )
             )
         }
@@ -11560,11 +11561,11 @@ private fun WaveSliderTrack(
         }
 
         val path = androidx.compose.ui.graphics.Path()
-        val waveStep = 3.dp.toPx().coerceAtLeast(1f)
-        val wavelength = 26.dp.toPx()
-        val amplitude = 1.4.dp.toPx()
+        val waveStep = 4.dp.toPx().coerceAtLeast(1f)
+        val wavelength = 32.dp.toPx()
+        val amplitude = 1.8.dp.toPx()
         val seedShift = (waveSeed and 0xFF) * 0.025f
-        val rampLength = 14.dp.toPx()
+        val rampLength = 18.dp.toPx()
         val twoPi = (Math.PI * 2).toFloat()
 
         var x = 0f
@@ -11581,7 +11582,7 @@ private fun WaveSliderTrack(
             path = path,
             color = activeColor,
             style = androidx.compose.ui.graphics.drawscope.Stroke(
-                width = 1.8.dp.toPx(),
+                width = trackThickness,
                 cap = androidx.compose.ui.graphics.StrokeCap.Round,
                 join = androidx.compose.ui.graphics.StrokeJoin.Round
             )
