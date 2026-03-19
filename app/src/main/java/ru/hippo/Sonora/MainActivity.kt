@@ -343,6 +343,7 @@ private data class SonoraAppSettings(
     val myWaveLook: MyWaveLook = MyWaveLook.Contours,
     val streamingSearchEngine: StreamingSearchEngine = StreamingSearchEngine.Spotify,
     val useArtworkBasedPlayerBackground: Boolean = true,
+    val useAccentAppBackground: Boolean = false,
     val accentHex: String = DEFAULT_ACCENT_HEX,
     val autoSaveStreamingSongToLibrary: Boolean = true,
     val preservePlayerModes: Boolean = true,
@@ -418,6 +419,7 @@ private class SonoraSettingsStore(context: Context) {
                 prefs.getString(KEY_STREAMING_SEARCH_ENGINE, StreamingSearchEngine.Spotify.storageValue)
             ),
             useArtworkBasedPlayerBackground = prefs.getBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, true),
+            useAccentAppBackground = prefs.getBoolean(KEY_APP_ACCENT_BACKGROUND, false),
             accentHex = accentHex,
             autoSaveStreamingSongToLibrary = prefs.getBoolean(KEY_AUTO_SAVE_STREAMING_SONG, true),
             preservePlayerModes = prefs.getBoolean(KEY_PRESERVE_PLAYER_MODES, true),
@@ -436,6 +438,7 @@ private class SonoraSettingsStore(context: Context) {
             .putString(KEY_MY_WAVE_LOOK, settings.myWaveLook.storageValue)
             .putString(KEY_STREAMING_SEARCH_ENGINE, settings.streamingSearchEngine.storageValue)
             .putBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, settings.useArtworkBasedPlayerBackground)
+            .putBoolean(KEY_APP_ACCENT_BACKGROUND, settings.useAccentAppBackground)
             .putString(KEY_ACCENT_HEX, normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX)
             .putBoolean(KEY_AUTO_SAVE_STREAMING_SONG, settings.autoSaveStreamingSongToLibrary)
             .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
@@ -542,6 +545,7 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_MY_WAVE_LOOK = "my_wave_look"
         const val KEY_STREAMING_SEARCH_ENGINE = "streaming_search_engine"
         const val KEY_PLAYER_ARTWORK_BACKGROUND = "player_artwork_background"
+        const val KEY_APP_ACCENT_BACKGROUND = "app_accent_background"
         const val KEY_ACCENT_HEX = "accent_hex"
         const val KEY_ACCENT_HUE = "accent_hue"
         const val KEY_ACCENT_COLOR_LEGACY = "accent_color"
@@ -3095,8 +3099,44 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
         resolveAccentColor(appSettings.accentHex)
     }
     val tabActiveColor = accentColor
+    val baseScheme = MaterialTheme.colorScheme
+    val appBackground = remember(baseScheme, accentColor, appSettings.useAccentAppBackground, isDark) {
+        if (!appSettings.useAccentAppBackground) {
+            baseScheme.background
+        } else if (isDark) {
+            blendColors(baseScheme.background, accentColor, 0.14f)
+        } else {
+            blendColors(baseScheme.background, accentColor, 0.09f)
+        }
+    }
+    val appSurface = remember(baseScheme, appBackground, accentColor, appSettings.useAccentAppBackground, isDark) {
+        if (!appSettings.useAccentAppBackground) {
+            baseScheme.surface
+        } else if (isDark) {
+            blendColors(appBackground, accentColor, 0.10f)
+        } else {
+            blendColors(appBackground, accentColor, 0.05f)
+        }
+    }
+    val appSurfaceVariant = remember(baseScheme, appSurface, accentColor, appSettings.useAccentAppBackground, isDark) {
+        if (!appSettings.useAccentAppBackground) {
+            baseScheme.surfaceVariant
+        } else if (isDark) {
+            blendColors(appSurface, accentColor, 0.08f)
+        } else {
+            blendColors(appSurface, accentColor, 0.04f)
+        }
+    }
+    val appColorScheme = remember(baseScheme, appBackground, appSurface, appSurfaceVariant) {
+        baseScheme.copy(
+            background = appBackground,
+            surface = appSurface,
+            surfaceVariant = appSurfaceVariant
+        )
+    }
 
     CompositionLocalProvider(LocalAccentColor provides accentColor) {
+    MaterialTheme(colorScheme = appColorScheme) {
         Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -4311,6 +4351,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
                 )
             }
         }
+    }
     }
 
     if (showPlaylistOptionsDialog && (openedDetailPlaylist?.isUser == true || openedDetailPlaylist?.isSharedOnline == true)) {
@@ -7649,6 +7690,15 @@ private fun SettingsPage(
                     checked = settings.useArtworkBasedPlayerBackground,
                     onCheckedChange = { enabled ->
                         onSettingsChange(settings.copy(useArtworkBasedPlayerBackground = enabled))
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsSwitchRow(
+                    title = "App background from accent",
+                    subtitle = "Tint the whole app with the selected accent color",
+                    checked = settings.useAccentAppBackground,
+                    onCheckedChange = { enabled ->
+                        onSettingsChange(settings.copy(useAccentAppBackground = enabled))
                     }
                 )
             }
