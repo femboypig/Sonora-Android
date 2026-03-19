@@ -345,7 +345,7 @@ private data class SonoraAppSettings(
     val myWaveLook: MyWaveLook = MyWaveLook.Contours,
     val streamingSearchEngine: StreamingSearchEngine = StreamingSearchEngine.Spotify,
     val useArtworkBasedPlayerBackground: Boolean = true,
-    val useAccentAppBackground: Boolean = false,
+    val appBackgroundHex: String? = null,
     val accentHex: String = DEFAULT_ACCENT_HEX,
     val autoSaveStreamingSongToLibrary: Boolean = true,
     val preservePlayerModes: Boolean = true,
@@ -421,7 +421,8 @@ private class SonoraSettingsStore(context: Context) {
                 prefs.getString(KEY_STREAMING_SEARCH_ENGINE, StreamingSearchEngine.Spotify.storageValue)
             ),
             useArtworkBasedPlayerBackground = prefs.getBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, true),
-            useAccentAppBackground = prefs.getBoolean(KEY_APP_ACCENT_BACKGROUND, false),
+            appBackgroundHex = normalizeHexColor(prefs.getString(KEY_APP_BACKGROUND_HEX, null))
+                ?: if (prefs.getBoolean(KEY_APP_ACCENT_BACKGROUND, false)) accentHex else null,
             accentHex = accentHex,
             autoSaveStreamingSongToLibrary = prefs.getBoolean(KEY_AUTO_SAVE_STREAMING_SONG, true),
             preservePlayerModes = prefs.getBoolean(KEY_PRESERVE_PLAYER_MODES, true),
@@ -440,7 +441,6 @@ private class SonoraSettingsStore(context: Context) {
             .putString(KEY_MY_WAVE_LOOK, settings.myWaveLook.storageValue)
             .putString(KEY_STREAMING_SEARCH_ENGINE, settings.streamingSearchEngine.storageValue)
             .putBoolean(KEY_PLAYER_ARTWORK_BACKGROUND, settings.useArtworkBasedPlayerBackground)
-            .putBoolean(KEY_APP_ACCENT_BACKGROUND, settings.useAccentAppBackground)
             .putString(KEY_ACCENT_HEX, normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX)
             .putBoolean(KEY_AUTO_SAVE_STREAMING_SONG, settings.autoSaveStreamingSongToLibrary)
             .putBoolean(KEY_PRESERVE_PLAYER_MODES, settings.preservePlayerModes)
@@ -448,6 +448,14 @@ private class SonoraSettingsStore(context: Context) {
             .putInt(KEY_MAX_STORAGE_MB, nearestMaxStorageOptionMb(settings.maxStorageMb))
             .putBoolean(KEY_CACHE_ONLINE_PLAYLIST_TRACKS, settings.cacheOnlinePlaylistTracks)
             .putInt(KEY_ONLINE_PLAYLIST_CACHE_MAX_MB, nearestMaxStorageOptionMb(settings.onlinePlaylistCacheMaxMb))
+            .apply {
+                if (settings.appBackgroundHex.isNullOrBlank()) {
+                    remove(KEY_APP_BACKGROUND_HEX)
+                } else {
+                    putString(KEY_APP_BACKGROUND_HEX, normalizeHexColor(settings.appBackgroundHex))
+                }
+                remove(KEY_APP_ACCENT_BACKGROUND)
+            }
             .apply()
     }
 
@@ -548,6 +556,7 @@ private class SonoraSettingsStore(context: Context) {
         const val KEY_STREAMING_SEARCH_ENGINE = "streaming_search_engine"
         const val KEY_PLAYER_ARTWORK_BACKGROUND = "player_artwork_background"
         const val KEY_APP_ACCENT_BACKGROUND = "app_accent_background"
+        const val KEY_APP_BACKGROUND_HEX = "app_background_hex"
         const val KEY_ACCENT_HEX = "accent_hex"
         const val KEY_ACCENT_HUE = "accent_hue"
         const val KEY_ACCENT_COLOR_LEGACY = "accent_color"
@@ -3113,31 +3122,34 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
     val tabActiveColor = accentColor
     val baseScheme = MaterialTheme.colorScheme
-    val appBackground = remember(baseScheme, accentColor, appSettings.useAccentAppBackground, isDark) {
-        if (!appSettings.useAccentAppBackground) {
+    val appBackgroundSource = remember(appSettings.appBackgroundHex) {
+        appSettings.appBackgroundHex?.let { parseHexColor(it) }
+    }
+    val appBackground = remember(baseScheme, appBackgroundSource, isDark) {
+        if (appBackgroundSource == null) {
             baseScheme.background
         } else if (isDark) {
-            blendColors(baseScheme.background, accentColor, 0.14f)
+            blendColors(baseScheme.background, appBackgroundSource, 0.18f)
         } else {
-            blendColors(baseScheme.background, accentColor, 0.09f)
+            blendColors(baseScheme.background, appBackgroundSource, 0.12f)
         }
     }
-    val appSurface = remember(baseScheme, appBackground, accentColor, appSettings.useAccentAppBackground, isDark) {
-        if (!appSettings.useAccentAppBackground) {
+    val appSurface = remember(baseScheme, appBackgroundSource, isDark) {
+        if (appBackgroundSource == null) {
             baseScheme.surface
         } else if (isDark) {
-            blendColors(appBackground, accentColor, 0.10f)
+            blendColors(baseScheme.surface, appBackgroundSource, 0.12f)
         } else {
-            blendColors(appBackground, accentColor, 0.05f)
+            blendColors(baseScheme.surface, appBackgroundSource, 0.08f)
         }
     }
-    val appSurfaceVariant = remember(baseScheme, appSurface, accentColor, appSettings.useAccentAppBackground, isDark) {
-        if (!appSettings.useAccentAppBackground) {
+    val appSurfaceVariant = remember(baseScheme, appBackgroundSource, isDark) {
+        if (appBackgroundSource == null) {
             baseScheme.surfaceVariant
         } else if (isDark) {
-            blendColors(appSurface, accentColor, 0.08f)
+            blendColors(baseScheme.surfaceVariant, appBackgroundSource, 0.10f)
         } else {
-            blendColors(appSurface, accentColor, 0.04f)
+            blendColors(baseScheme.surfaceVariant, appBackgroundSource, 0.06f)
         }
     }
     val appColorScheme = remember(baseScheme, appBackground, appSurface, appSurfaceVariant) {
@@ -7622,7 +7634,15 @@ private fun SettingsPage(
         hasOnlinePlaylistCacheLimit && onlinePlaylistCacheUsedBytes > onlinePlaylistCacheBytes
     val accentHex = normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX
     val accentPreview = remember(accentHex) { resolveAccentColor(accentHex) }
+    val appBackgroundHex = normalizeHexColor(settings.appBackgroundHex)
+    val appBackgroundFallbackHex = remember(MaterialTheme.colorScheme.background) {
+        formatColorHex(MaterialTheme.colorScheme.background)
+    }
+    val appBackgroundPreview = remember(appBackgroundHex, appBackgroundFallbackHex) {
+        appBackgroundHex?.let { parseHexColor(it) } ?: resolveAccentColor(appBackgroundFallbackHex)
+    }
     var showAccentColorDialog by rememberSaveable { mutableStateOf(false) }
+    var showAppBackgroundColorDialog by rememberSaveable { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -7667,6 +7687,16 @@ private fun SettingsPage(
                     }
                 )
                 Spacer(modifier = Modifier.height(12.dp))
+                SettingsColorPickerRow(
+                    title = "App background",
+                    subtitle = "System background or custom #RRGGBB",
+                    valueLabel = appBackgroundHex ?: "System",
+                    color = appBackgroundPreview,
+                    onClick = {
+                        showAppBackgroundColorDialog = true
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
                 SettingsChoiceRow(
                     title = "Streaming search engine",
                     subtitle = "Choose provider for online tracks",
@@ -7707,15 +7737,6 @@ private fun SettingsPage(
                     checked = settings.useArtworkBasedPlayerBackground,
                     onCheckedChange = { enabled ->
                         onSettingsChange(settings.copy(useArtworkBasedPlayerBackground = enabled))
-                    }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                SettingsSwitchRow(
-                    title = "App background from accent",
-                    subtitle = "Tint the whole app with the selected accent color",
-                    checked = settings.useAccentAppBackground,
-                    onCheckedChange = { enabled ->
-                        onSettingsChange(settings.copy(useAccentAppBackground = enabled))
                     }
                 )
             }
@@ -7947,6 +7968,22 @@ private fun SettingsPage(
             onColorSelected = { selected ->
                 onSettingsChange(settings.copy(accentHex = selected))
                 showAccentColorDialog = false
+            }
+        )
+    }
+
+    if (showAppBackgroundColorDialog) {
+        AppBackgroundColorPickerDialog(
+            selectedHex = appBackgroundHex,
+            fallbackHex = appBackgroundFallbackHex,
+            onDismiss = { showAppBackgroundColorDialog = false },
+            onColorSelected = { selected ->
+                onSettingsChange(settings.copy(appBackgroundHex = selected))
+                showAppBackgroundColorDialog = false
+            },
+            onReset = {
+                onSettingsChange(settings.copy(appBackgroundHex = null))
+                showAppBackgroundColorDialog = false
             }
         )
     }
@@ -8379,6 +8416,141 @@ private fun AccentColorPickerDialog(
         dismissButton = {
             AccentTextButton(onClick = onDismiss) {
                 Text("Cancel")
+            }
+        },
+        confirmButton = {
+            AccentTextButton(
+                onClick = {
+                    onColorSelected(normalizedHex)
+                }
+            ) {
+                Text("Apply")
+            }
+        }
+    )
+}
+
+@Composable
+private fun AppBackgroundColorPickerDialog(
+    selectedHex: String?,
+    fallbackHex: String,
+    onDismiss: () -> Unit,
+    onColorSelected: (String) -> Unit,
+    onReset: () -> Unit
+) {
+    val initialColor = remember(selectedHex, fallbackHex) {
+        selectedHex?.let { parseHexColor(it) } ?: parseHexColor(fallbackHex) ?: resolveAccentColor(DEFAULT_ACCENT_HEX)
+    }
+    var red by rememberSaveable(selectedHex, fallbackHex) {
+        mutableIntStateOf((initialColor.red * 255f).roundToInt().coerceIn(0, 255))
+    }
+    var green by rememberSaveable(selectedHex, fallbackHex) {
+        mutableIntStateOf((initialColor.green * 255f).roundToInt().coerceIn(0, 255))
+    }
+    var blue by rememberSaveable(selectedHex, fallbackHex) {
+        mutableIntStateOf((initialColor.blue * 255f).roundToInt().coerceIn(0, 255))
+    }
+    var hexInput by rememberSaveable(selectedHex, fallbackHex) { mutableStateOf(formatColorHex(initialColor)) }
+
+    val previewColor = remember(red, green, blue) {
+        Color(red / 255f, green / 255f, blue / 255f, 1f)
+    }
+    val normalizedHex = remember(red, green, blue) { formatColorHex(previewColor) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("App background") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(previewColor)
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f),
+                                shape = CircleShape
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = normalizedHex,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                TextField(
+                    value = hexInput,
+                    onValueChange = { value ->
+                        var cleaned = value.uppercase()
+                            .filter { it == '#' || it in '0'..'9' || it in 'A'..'F' }
+                        cleaned = if (cleaned.startsWith("#")) cleaned.drop(1) else cleaned
+                        cleaned = cleaned.take(6)
+                        hexInput = if (cleaned.isEmpty()) "#" else "#$cleaned"
+
+                        if (cleaned.length == 6) {
+                            parseHexColor("#$cleaned")?.let { parsed ->
+                                red = (parsed.red * 255f).roundToInt().coerceIn(0, 255)
+                                green = (parsed.green * 255f).roundToInt().coerceIn(0, 255)
+                                blue = (parsed.blue * 255f).roundToInt().coerceIn(0, 255)
+                                hexInput = formatColorHex(parsed)
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    label = { Text("Custom #RRGGBB") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                AccentChannelSlider(
+                    title = "R",
+                    value = red,
+                    trackColor = Color(0xFFE65A5A),
+                    onValueChange = { updated ->
+                        red = updated
+                        hexInput = formatColorHex(Color(red / 255f, green / 255f, blue / 255f, 1f))
+                    }
+                )
+                AccentChannelSlider(
+                    title = "G",
+                    value = green,
+                    trackColor = Color(0xFF47B35D),
+                    onValueChange = { updated ->
+                        green = updated
+                        hexInput = formatColorHex(Color(red / 255f, green / 255f, blue / 255f, 1f))
+                    }
+                )
+                AccentChannelSlider(
+                    title = "B",
+                    value = blue,
+                    trackColor = Color(0xFF4F90FF),
+                    onValueChange = { updated ->
+                        blue = updated
+                        hexInput = formatColorHex(Color(red / 255f, green / 255f, blue / 255f, 1f))
+                    }
+                )
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AccentTextButton(onClick = onReset) {
+                    Text("System")
+                }
+                AccentTextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
             }
         },
         confirmButton = {
