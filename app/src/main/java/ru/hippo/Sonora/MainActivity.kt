@@ -7635,9 +7635,8 @@ private fun SettingsPage(
     val accentHex = normalizeHexColor(settings.accentHex) ?: DEFAULT_ACCENT_HEX
     val accentPreview = remember(accentHex) { resolveAccentColor(accentHex) }
     val appBackgroundHex = normalizeHexColor(settings.appBackgroundHex)
-    val appBackgroundFallbackHex = remember(MaterialTheme.colorScheme.background) {
-        formatColorHex(MaterialTheme.colorScheme.background)
-    }
+    val appBackgroundBaseColor = MaterialTheme.colorScheme.background
+    val appBackgroundFallbackHex = remember(appBackgroundBaseColor) { formatColorHex(appBackgroundBaseColor) }
     val appBackgroundPreview = remember(appBackgroundHex, appBackgroundFallbackHex) {
         appBackgroundHex?.let { parseHexColor(it) } ?: resolveAccentColor(appBackgroundFallbackHex)
     }
