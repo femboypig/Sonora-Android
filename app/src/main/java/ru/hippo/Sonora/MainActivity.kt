@@ -2951,7 +2951,7 @@ private fun SonoraApp(incomingSharedPlaylistUrlState: MutableState<String?>) {
     }
 
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-    val tabBarBackground = MaterialTheme.colorScheme.background
+    val tabBarBackground = appColorScheme.background
     val tabInactiveColor = if (isDark) SonoraTabInactiveDark else SonoraTabInactiveLight
 
     val isCreateNameScreen = playlistCreateStep == PlaylistCreateStep.Name
