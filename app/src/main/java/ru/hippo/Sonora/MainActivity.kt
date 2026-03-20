@@ -11264,9 +11264,9 @@ private fun PlayerView(
                         }
                     },
                     thumb = {
-                        Canvas(modifier = Modifier.size(width = 18.dp, height = 22.dp)) {
-                            val thumbWidth = 3.dp.toPx()
-                            val thumbHeight = 14.dp.toPx()
+                        Canvas(modifier = Modifier.size(width = 22.dp, height = 26.dp)) {
+                            val thumbWidth = 4.dp.toPx()
+                            val thumbHeight = 18.dp.toPx()
                             val thumbLeft = (size.width - thumbWidth) / 2f
                             val thumbTop = (size.height - thumbHeight) / 2f
                             drawRoundRect(
@@ -11531,7 +11531,7 @@ private fun WaveSliderTrack(
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(24.dp)
+            .height(28.dp)
     ) {
         val start = sliderState.valueRange.start
         val end = sliderState.valueRange.endInclusive
@@ -11541,8 +11541,8 @@ private fun WaveSliderTrack(
         val progressX = size.width * progress
 
         val centerY = size.height / 2f
-        val trackThickness = 5.dp.toPx()
-        val trackCorner = 2.5.dp.toPx()
+        val trackThickness = 8.dp.toPx()
+        val trackCorner = 4.dp.toPx()
 
         if (progressX < size.width) {
             drawRoundRect(
