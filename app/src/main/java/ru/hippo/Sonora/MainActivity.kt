@@ -8777,9 +8777,9 @@ private fun SettingsSliderStylePreview(useWaveSlider: Boolean) {
             if (progressX > 0f) {
                 if (useWaveSlider) {
                     val path = androidx.compose.ui.graphics.Path()
-                    val waveStep = 3.dp.toPx().coerceAtLeast(1f)
-                    val wavelength = 26.dp.toPx()
-                    val amplitude = 1.4.dp.toPx()
+                    val waveStep = 2.dp.toPx().coerceAtLeast(1f)
+                    val wavelength = 18.dp.toPx()
+                    val amplitude = 2.1.dp.toPx()
                     val rampLength = 12.dp.toPx()
                     val twoPi = (Math.PI * 2).toFloat()
 
@@ -9121,9 +9121,9 @@ private fun WaveDownloadProgressBar(
         val centerY = size.height * 0.5f
         val lineHeight = 2.dp.toPx()
         val activeWidth = size.width * progressValue
-        val wavelength = 28.dp.toPx()
-        val amplitude = 1.6.dp.toPx()
-        val step = 3.dp.toPx().coerceAtLeast(1f)
+        val wavelength = 22.dp.toPx()
+        val amplitude = 2.2.dp.toPx()
+        val step = 2.dp.toPx().coerceAtLeast(1f)
         val phaseOffset = waveShift * (Math.PI.toFloat() * 2f)
 
         drawRoundRect(
@@ -11531,7 +11531,7 @@ private fun WaveSliderTrack(
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(28.dp)
+            .height(24.dp)
     ) {
         val start = sliderState.valueRange.start
         val end = sliderState.valueRange.endInclusive
@@ -11541,17 +11541,16 @@ private fun WaveSliderTrack(
         val progressX = size.width * progress
 
         val centerY = size.height / 2f
-        val trackThickness = 8.dp.toPx()
-        val trackCorner = 4.dp.toPx()
+        val inactiveLineHeight = 2.dp.toPx()
 
         if (progressX < size.width) {
             drawRoundRect(
                 color = inactiveColor,
-                topLeft = Offset(progressX, centerY - (trackThickness * 0.5f)),
-                size = Size(size.width - progressX, trackThickness),
+                topLeft = Offset(progressX, centerY - (inactiveLineHeight * 0.5f)),
+                size = Size(size.width - progressX, inactiveLineHeight),
                 cornerRadius = CornerRadius(
-                    x = trackCorner,
-                    y = trackCorner
+                    x = inactiveLineHeight * 0.5f,
+                    y = inactiveLineHeight * 0.5f
                 )
             )
         }
@@ -11561,11 +11560,11 @@ private fun WaveSliderTrack(
         }
 
         val path = androidx.compose.ui.graphics.Path()
-        val waveStep = 4.dp.toPx().coerceAtLeast(1f)
-        val wavelength = 32.dp.toPx()
-        val amplitude = 1.8.dp.toPx()
+        val waveStep = 2.dp.toPx().coerceAtLeast(1f)
+        val wavelength = 18.dp.toPx()
+        val amplitude = 2.1.dp.toPx()
         val seedShift = (waveSeed and 0xFF) * 0.025f
-        val rampLength = 18.dp.toPx()
+        val rampLength = 14.dp.toPx()
         val twoPi = (Math.PI * 2).toFloat()
 
         var x = 0f
@@ -11582,7 +11581,7 @@ private fun WaveSliderTrack(
             path = path,
             color = activeColor,
             style = androidx.compose.ui.graphics.drawscope.Stroke(
-                width = trackThickness,
+                width = 1.8.dp.toPx(),
                 cap = androidx.compose.ui.graphics.StrokeCap.Round,
                 join = androidx.compose.ui.graphics.StrokeJoin.Round
             )
